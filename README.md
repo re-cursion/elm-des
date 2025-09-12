@@ -1,0 +1,1 @@
+With elm-des the interaction of resources, queues and Workloads can be simulated using a discrete event simulation on the web. This is my first ELM project, hence I'm certainly not using all the right idioms or libraries yet.
