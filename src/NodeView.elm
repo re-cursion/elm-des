@@ -1,0 +1,142 @@
+module NodeView exposing (drawArrowWithQueue, drawNode)
+
+import Svg exposing (..)
+import Svg.Attributes exposing (cx, cy, fill, fontSize, points, r, stroke, strokeWidth, x, x1, x2, y, y1, y2)
+import Types exposing (Node, NodeID, Queue, QueueID, WorkID, fetchNodeID, fetchQueueID, fetchWorkID)
+
+
+drawNode : Node -> Svg msg
+drawNode n =
+    let
+        busyColor =
+            if n.busy then
+                "#ffb300"
+
+            else
+                "#90caf9"
+
+        taskText =
+            case n.currentTask of
+                Just tid ->
+                    "T" ++ String.fromInt (Types.fetchWorkID tid.id)
+
+                Nothing ->
+                    ""
+
+        xPos =
+            n.view.x
+
+        yPos =
+            n.view.y
+    in
+    g []
+        [ circle [ cx (String.fromFloat xPos), cy (String.fromFloat yPos), r "30", fill busyColor, stroke "#1976d2", strokeWidth "2" ] []
+        , text_ [ x (String.fromFloat (xPos - 18)), y (String.fromFloat (yPos - 5)), fontSize "16", fill "#0d47a1" ] [ Svg.text ("N" ++ String.fromInt (fetchNodeID n.id)) ]
+        , text_ [ x (String.fromFloat (xPos - 10)), y (String.fromFloat (yPos + 15)), fontSize "14", fill "#d84315" ] [ Svg.text taskText ]
+        ]
+
+
+drawArrowWithQueue : Node -> Node -> Queue -> Svg msg
+drawArrowWithQueue fromN toN q =
+    let
+        x1Pos =
+            fromN.view.x
+
+        y1Pos =
+            fromN.view.y
+
+        x2Pos =
+            toN.view.x
+
+        y2Pos =
+            toN.view.y
+
+        dx =
+            x2Pos - x1Pos
+
+        dy =
+            y2Pos - y1Pos
+
+        len =
+            sqrt (dx ^ 2 + dy ^ 2)
+
+        ux =
+            dx / len
+
+        uy =
+            dy / len
+
+        startX =
+            x1Pos + ux * 30
+
+        startY =
+            y1Pos + uy * 30
+
+        endX =
+            x2Pos - ux * 30
+
+        endY =
+            y2Pos - uy * 30
+
+        arrowHead =
+            let
+                size =
+                    8
+
+                angle =
+                    0.5
+
+                leftX =
+                    endX - size * (ux * cos angle - uy * sin angle)
+
+                leftY =
+                    endY - size * (uy * cos angle + ux * sin angle)
+
+                rightX =
+                    endX - size * (ux * cos -angle - uy * sin -angle)
+
+                rightY =
+                    endY - size * (uy * cos -angle + ux * sin -angle)
+            in
+            [ polygon
+                [ points
+                    (String.join " "
+                        [ String.fromFloat endX ++ "," ++ String.fromFloat endY
+                        , String.fromFloat leftX ++ "," ++ String.fromFloat leftY
+                        , String.fromFloat rightX ++ "," ++ String.fromFloat rightY
+                        ]
+                    )
+                , fill "#1976d2"
+                ]
+                []
+            ]
+
+        taskDots =
+            let
+                nTasks =
+                    List.length q.tasks
+
+                spacing =
+                    if nTasks > 1 then
+                        (len - 60) / toFloat (nTasks - 1)
+
+                    else
+                        0
+            in
+            List.indexedMap
+                (\i _ ->
+                    let
+                        px =
+                            startX + ux * (toFloat i * spacing)
+
+                        py =
+                            startY + uy * (toFloat i * spacing)
+                    in
+                    circle [ cx (String.fromFloat px), cy (String.fromFloat py), r "6", fill "#43a047", stroke "#1b5e20", strokeWidth "1.5" ] []
+                )
+                q.tasks
+    in
+    g []
+        (line [ x1 (String.fromFloat startX), y1 (String.fromFloat startY), x2 (String.fromFloat endX), y2 (String.fromFloat endY), stroke "#1976d2", strokeWidth "2" ] []
+            :: (arrowHead ++ taskDots)
+        )
