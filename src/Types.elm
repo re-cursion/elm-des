@@ -1,4 +1,4 @@
-module Types exposing (Time(..), Event(..), EventType(..), Model, Resource, ResourceID(..), cmpResourceID, ResourceViewInfo, Queue, QueueID(..), Work, WorkID(..), fetchResourceID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventResourceID, addTimes, eventType)
+module Types exposing (Time(..), Event(..), EventType(..), Model, Resource, ResourceID(..), cmpResourceID, ResourceViewInfo, QueueID(..), Work, WorkID(..), fetchResourceID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventResourceID, addTimes, eventType)
 
 import Dict exposing (Dict)
 import Process exposing (Id)
@@ -63,7 +63,7 @@ compareEventTimes evt0 evt1 =
 
 type alias Model =
     { resources : Dict Int Resource
-    , queues : Dict Int Queue
+  --  , queues : Dict Int Queue
     , events : List Event
     , currentTime : Time
     }
@@ -106,8 +106,6 @@ type alias Work =
     }
 
 
-type alias Queue =
-    { tasks : List Work }
 
 
 

@@ -1,4 +1,4 @@
-module Queue exposing (Queue(..), put, take, Behaviour, PutResult, QueueConfig)
+module Queue exposing (Queue(..), put, take, tasks, Behaviour(..), PutResult, QueueConfig, config)
 
 import Types exposing (Work)
 
