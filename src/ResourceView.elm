@@ -1,12 +1,12 @@
-module NodeView exposing (drawArrowWithQueue, drawNode)
+module ResourceView exposing (drawArrowWithQueue, drawResource)
 
 import Svg exposing (..)
 import Svg.Attributes exposing (cx, cy, fill, fontSize, points, r, stroke, strokeWidth, x, x1, x2, y, y1, y2)
-import Types exposing (Node, NodeID, Queue, QueueID, WorkID, fetchNodeID, fetchQueueID, fetchWorkID)
+import Types exposing (Resource, ResourceID, Queue, QueueID, WorkID, fetchResourceID, fetchQueueID, fetchWorkID)
 
 
-drawNode : Node -> Svg msg
-drawNode n =
+drawResource : Resource -> Svg msg
+drawResource n =
     let
         busyColor =
             if n.busy then
@@ -28,15 +28,17 @@ drawNode n =
 
         yPos =
             n.view.y
+
+        nid = 0  -- fetchResourceID n.id
     in
     g []
         [ circle [ cx (String.fromFloat xPos), cy (String.fromFloat yPos), r "30", fill busyColor, stroke "#1976d2", strokeWidth "2" ] []
-        , text_ [ x (String.fromFloat (xPos - 18)), y (String.fromFloat (yPos - 5)), fontSize "16", fill "#0d47a1" ] [ Svg.text ("N" ++ String.fromInt (fetchNodeID n.id)) ]
+        , text_ [ x (String.fromFloat (xPos - 18)), y (String.fromFloat (yPos - 5)), fontSize "16", fill "#0d47a1" ] [ Svg.text ("N" ++ String.fromInt nid) ]
         , text_ [ x (String.fromFloat (xPos - 10)), y (String.fromFloat (yPos + 15)), fontSize "14", fill "#d84315" ] [ Svg.text taskText ]
         ]
 
 
-drawArrowWithQueue : Node -> Node -> Queue -> Svg msg
+drawArrowWithQueue : Resource -> Resource -> Queue -> Svg msg
 drawArrowWithQueue fromN toN q =
     let
         x1Pos =

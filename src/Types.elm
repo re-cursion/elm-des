@@ -1,9 +1,10 @@
-module Types exposing (Time(..), Event(..), EventType(..), Model, Node, NodeID(..), NodeViewInfo, Queue, QueueID(..), Work, WorkID(..), fetchNodeID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventNodeID, addTimes, eventType)
+module Types exposing (Time(..), Event(..), EventType(..), Model, Resource, ResourceID(..), cmpResourceID, ResourceViewInfo, Queue, QueueID(..), Work, WorkID(..), fetchResourceID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventResourceID, addTimes, eventType)
 
+import Dict exposing (Dict)
 import Process exposing (Id)
 
 
-type alias NodeViewInfo =
+type alias ResourceViewInfo =
     { x : Float
     , y : Float
     }
@@ -32,7 +33,7 @@ addTimes t0 t1 =
 
 
 type Event =
-    Event Time NodeID EventType
+    Event Time ResourceID EventType
 
 
 eventTime : Event -> Time
@@ -44,8 +45,8 @@ eventType (Event _ _ tp) =
     tp
 
 
-eventNodeID : Event -> NodeID
-eventNodeID (Event _ nid _) = 
+eventResourceID : Event -> ResourceID
+eventResourceID (Event _ nid _) = 
     nid
 
 
@@ -61,8 +62,8 @@ compareEventTimes evt0 evt1 =
 
 
 type alias Model =
-    { nodes : List Node
-    , queues : List Queue
+    { resources : Dict Int Resource
+    , queues : Dict Int Queue
     , events : List Event
     , currentTime : Time
     }
@@ -76,9 +77,11 @@ type QueueID
     = QueueID Int
 
 
-type NodeID
-    = NodeID Int
+type ResourceID
+    = ResourceID Int
 
+cmpResourceID : ResourceID -> ResourceID -> Order
+cmpResourceID lhs rhs = Basics.compare (fetchResourceID lhs) (fetchResourceID rhs)
 
 fetchWorkID : WorkID -> Int
 fetchWorkID (WorkID tid) =
@@ -90,9 +93,11 @@ fetchQueueID (QueueID qid) =
     qid
 
 
-fetchNodeID : NodeID -> Int
-fetchNodeID (NodeID nid) =
+fetchResourceID : ResourceID -> Int
+fetchResourceID (ResourceID nid) =
     nid
+
+
 
 
 type alias Work =
@@ -102,14 +107,16 @@ type alias Work =
 
 
 type alias Queue =
-    { id : QueueID, tasks : List Work }
+    { tasks : List Work }
 
 
-type alias Node =
-    { id : NodeID
-    , inputQueue : Maybe QueueID
+
+
+type alias Resource =
+    { inputQueue : Maybe QueueID
     , outputQueues : List QueueID
-    , view : NodeViewInfo
+    , view : ResourceViewInfo
     , busy : Bool
     , currentTask : Maybe Work
     }
+

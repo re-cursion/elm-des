@@ -3,22 +3,22 @@ module Main exposing (..)
 import Browser
 import Html exposing (Html, button, div, li, ul)
 import Html.Events exposing (onClick)
-import NodeView exposing (drawArrowWithQueue, drawNode)
+import ResourceView exposing (drawArrowWithQueue, drawResource)
 import Svg exposing (svg)
 import Svg.Attributes exposing (..)
-import Types exposing (Time(..), Event(..), EventType(..), Model, Node, NodeID(..), Queue, QueueID(..), Work, WorkID(..), fetchNodeID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventNodeID, addTimes, eventType)
-
+import Types exposing (Time(..), Event(..), EventType(..), Model, Resource, ResourceID(..), cmpResourceID, Queue, QueueID(..), Work, WorkID(..), fetchResourceID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventResourceID, addTimes, eventType)
+import Dict exposing (Dict)
 
 init =
-    { nodes =
-        [ { id = NodeID 1, inputQueue = Just (QueueID 3), outputQueues = [ (QueueID 1) ], view = { x = 100, y = 100 }, busy = False, currentTask = Nothing } -- initial node
-        , { id = NodeID 2, inputQueue = Just (QueueID 1), outputQueues = [ (QueueID 2) ], view = { x = 300, y = 110 }, busy = False, currentTask = Nothing }
-        , { id = NodeID 3, inputQueue = Just (QueueID 2), outputQueues = [ (QueueID 3) ], view = { x = 310, y = 200 }, busy = False, currentTask = Nothing }
+    { resources = Dict.fromList
+        [ (1 , { inputQueue = Just (QueueID 3), outputQueues = [ (QueueID 1) ], view = { x = 100, y = 100 }, busy = False, currentTask = Nothing })
+        , (2 , { inputQueue = Just (QueueID 1), outputQueues = [ (QueueID 2) ], view = { x = 300, y = 110 }, busy = False, currentTask = Nothing })
+        , (3 , { inputQueue = Just (QueueID 2), outputQueues = [ (QueueID 3) ], view = { x = 310, y = 200 }, busy = False, currentTask = Nothing })
         ]
-    , queues =
-        [ { id = QueueID 1, tasks = [ Work (WorkID 1) (Time 5), Work (WorkID 2) (Time 7), Work (WorkID 3) (Time 2) ] }
-        , { id = QueueID 2, tasks = [] }
-        , { id = QueueID 3, tasks = [] }
+    , queues = Dict.fromList
+        [ (1, { tasks = [ Work (WorkID 1) (Time 5), Work (WorkID 2) (Time 7), Work (WorkID 3) (Time 2) ] })
+        , (2, { tasks = [] })
+        , (3, { tasks = [] })
         ]
     , events =
         []
@@ -39,13 +39,13 @@ update msg model =
 
 processNextStep : Model -> Model
 processNextStep model =
-    -- handle all nodes: service idle nodes. Create new events for all idle nodes to check the queues
+    -- handle all resources: service idle resources. Create new events for all idle resources to check the queues
     let
-        idleNodes =
-            List.filter (\n -> n.inputQueue /= Nothing && not n.busy) model.nodes
+        idleResources =
+            Dict.filter (\_ resource -> resource.inputQueue /= Nothing && not resource.busy) model.resources
 
         updatedEvents =
-            model.events ++ List.map (\n -> (Event model.currentTime n.id FetchTask) ) idleNodes
+            model.events ++ (idleResources |> Dict.keys |> List.map (\id -> Event model.currentTime (ResourceID id) FetchTask ) )
 
         -- sort events by time
         sortedEvents =
@@ -63,23 +63,23 @@ processNextStep model =
     }
 
 
-partitionNodeMatchingEvent : Event -> List Node -> ( Maybe Node, List Node )
-partitionNodeMatchingEvent event nodes =
+partitionResourceMatchingEvent : Event -> List Resource -> ( Maybe Resource, List Resource )
+partitionResourceMatchingEvent event resources =
     let
         ( matching, remaining ) =
-            List.partition (\n -> n.id == (eventNodeID event)) nodes
+            List.partition (\n -> n.id == (eventResourceID event)) resources
     in
     case matching of
         n :: _ ->
             ( Just n, remaining )
 
         [] ->
-            ( Nothing, nodes )
+            ( Nothing, resources )
 
 
-partitionInputQueueMatchingNode : Maybe Node -> List Queue -> ( Maybe Queue, List Queue )
-partitionInputQueueMatchingNode maybeNode queues =
-    case maybeNode of
+partitionInputQueueMatchingResource : Maybe Resource -> List Queue -> ( Maybe Queue, List Queue )
+partitionInputQueueMatchingResource maybeResource queues =
+    case maybeResource of
         Just n ->
             let
                 ( matchingQueues, remainingQueues ) =
@@ -102,9 +102,9 @@ compareTaskLength q1 q2 =
     compare (List.length q1.tasks) (List.length q2.tasks)
 
 
-partitionOutputQueueMatchingNode : Maybe Node -> List Queue -> ( Maybe Queue, List Queue )
-partitionOutputQueueMatchingNode maybeNode queues =
-    case maybeNode of
+partitionOutputQueueMatchingResource : Maybe Resource -> Dict QueueID Queue -> Maybe Queue
+partitionOutputQueueMatchingResource maybeResource queues =
+    case maybeResource of
         Just n ->
             let
                 ( matchingQueues, _ ) =
@@ -131,37 +131,37 @@ partitionOutputQueueMatchingNode maybeNode queues =
             ( Nothing, queues )
 
 
-fetchTaskFromNode : Maybe Node -> Maybe Work
-fetchTaskFromNode maybeNode =
-    maybeNode |> Maybe.andThen .currentTask
+fetchTaskFromResource : Maybe Resource -> Maybe Work
+fetchTaskFromResource maybeResource =
+    maybeResource |> Maybe.andThen .currentTask
 
 
 
--- case maybeNode of
+-- case maybeResource of
 --     Just n ->
 --         n.currentTask
 --     Nothing ->
 --         Nothing
 
 
-fetchTaskFromQueue : Time -> List Event -> ( List Node, List Queue ) -> ( List Node, List Queue, List Event )
-fetchTaskFromQueue currentTime fetchTaskEvents ( nodes, queues ) =
+fetchTaskFromQueue : Time -> List Event -> ( List Resource, List Queue ) -> ( List Resource, List Queue, List Event )
+fetchTaskFromQueue currentTime fetchTaskEvents ( resources, queues ) =
     case fetchTaskEvents of
         [] ->
-            ( nodes, queues, [] )
+            ( resources, queues, [] )
 
         -- no more fetch events to process
         event :: remainingEvents ->
             let
-                ( node, remainingNodes ) =
-                    partitionNodeMatchingEvent event nodes
+                ( resource, remainingResources ) =
+                    partitionResourceMatchingEvent event resources
 
-                -- select node based on event
+                -- select resource based on event
                 ( queue, remainingQueues ) =
-                    partitionInputQueueMatchingNode node queues
+                    partitionInputQueueMatchingResource resource queues
 
-                ( updatedNode, updatedQueue, eventToBeScheduled ) =
-                    case ( node, queue ) of
+                ( updatedResource, updatedQueue, eventToBeScheduled ) =
+                    case ( resource, queue ) of
                         ( Just n, Just q ) ->
                             case q.tasks of
                                 -- no task to fetch
@@ -178,9 +178,9 @@ fetchTaskFromQueue currentTime fetchTaskEvents ( nodes, queues ) =
                         _ ->
                             ( Nothing, Nothing, [] )
 
-                -- no updates if node or queue not found
-                ( updatedNodes, updatedQueues ) =
-                    case ( updatedNode, updatedQueue ) of
+                -- no updates if resource or queue not found
+                ( updatedResources, updatedQueues ) =
+                    case ( updatedResource, updatedQueue ) of
                         ( Just un, Just uq ) ->
                             ( List.map
                                 (\n ->
@@ -190,7 +190,7 @@ fetchTaskFromQueue currentTime fetchTaskEvents ( nodes, queues ) =
                                     else
                                         n
                                 )
-                                nodes
+                                resources
                             , List.map
                                 (\q ->
                                     if q.id == uq.id then
@@ -203,50 +203,50 @@ fetchTaskFromQueue currentTime fetchTaskEvents ( nodes, queues ) =
                             )
 
                         _ ->
-                            ( nodes, queues )
+                            ( resources, queues )
 
                 -- if there are more fetch events, process them (recursively)
-                ( upNodes, upQueues, upEvents ) =
-                    fetchTaskFromQueue currentTime remainingEvents ( updatedNodes, updatedQueues )
+                ( upResources, upQueues, upEvents ) =
+                    fetchTaskFromQueue currentTime remainingEvents ( updatedResources, updatedQueues )
 
             in
-            ( upNodes, upQueues, eventToBeScheduled ++ upEvents )
+            ( upResources, upQueues, eventToBeScheduled ++ upEvents )
 
 
 
 -- accumulate scheduled events
 
 
-pushTaskToQueue : List Event -> ( List Node, List Queue ) -> ( List Node, List Queue )
-pushTaskToQueue serviceCompleteEvents ( nodes, queues ) =
+pushTaskToQueue : List Event -> ( List Resource, Dict QueueID Queue ) -> ( List Resource, Dict QueueID Queue )
+pushTaskToQueue serviceCompleteEvents ( resources, queues ) =
     case serviceCompleteEvents of
         [] ->
-            ( nodes, queues )
+            ( resources, queues )
 
         -- no service complete events to process
         event :: remainingEvents ->
             let
-                ( node, remainingNodes ) =
-                    partitionNodeMatchingEvent event nodes
+                ( resource, remainingResources ) =
+                    partitionResourceMatchingEvent event resources
 
-                -- select node based on event
+                -- select resource based on event
                 ( queue, remainingQueues ) =
-                    partitionOutputQueueMatchingNode node queues
+                    partitionOutputQueueMatchingResource resource queues
 
                 task =
-                    fetchTaskFromNode node
+                    fetchTaskFromResource resource
 
-                ( updatedNodes, updatedQueues ) =
-                    case ( node, queue, task ) of
+                ( updatedResources, updatedQueues ) =
+                    case ( resource, queue, task ) of
                         ( Just n, Just q, Just t ) ->
-                            ( { n | busy = False, currentTask = Nothing } :: remainingNodes
+                            ( { n | busy = False, currentTask = Nothing } :: remainingResources
                             , { q | tasks = q.tasks ++ [ t ] } :: remainingQueues
                             )
 
                         _ ->
-                            ( nodes, queues )
+                            ( resources, queues )
             in
-            pushTaskToQueue remainingEvents ( updatedNodes, updatedQueues )
+            pushTaskToQueue remainingEvents ( updatedResources, updatedQueues )
 
 
 
@@ -282,21 +282,21 @@ executeOnCurrentEvents model currentEvents laterEvents =
         fetchTaskEvents =
             List.filter isFetchTaskEvent currentEvents
 
-        ( changedNodes, changedQueues, newEvents ) =
-            ( model.nodes, model.queues )
+        ( changedResources, changedQueues, newEvents ) =
+            ( model.resources, model.queues )
                 |> pushTaskToQueue serviceCompleteEvents
                 |> fetchTaskFromQueue model.currentTime fetchTaskEvents
 
         nextModelEvents =
             laterEvents ++ newEvents
     in
-    { model | nodes = changedNodes, queues = changedQueues, events = nextModelEvents }
+    { model | resources = changedResources, queues = changedQueues, events = nextModelEvents }
 
 
 view : Model -> Html Msg
 view model =
     div []
-        [ Html.text "Minimal Node Simulation"
+        [ Html.text "Minimal Resource Simulation"
         , svgView model
         , button [ onClick StepSimulation ] [ Html.text "Step Simulation" ]
         , Html.text ("Current time: " ++ String.fromInt (model.currentTime |> fetchTime))
@@ -310,15 +310,15 @@ view model =
 eventToString : Event -> String
 eventToString e =
     let
-        nid = e |> eventNodeID |> fetchNodeID |> String.fromInt
+        nid = e |> eventResourceID |> fetchResourceID |> String.fromInt
         time = e |> eventTime |> fetchTime |> String.fromInt
         etype =
             case e |> eventType of
                 ServiceComplete ->
-                    "ServiceComplete at node " ++ nid
+                    "ServiceComplete at resource " ++ nid
 
                 FetchTask ->
-                    "FetchTask at node " ++ nid
+                    "FetchTask at resource " ++ nid
     in
     time ++ ": " ++ etype
 
@@ -330,13 +330,13 @@ svgView model =
             List.concatMap
                 (\q ->
                     let
-                        fromNodes =
-                            List.filter (\n -> List.member q.id n.outputQueues) model.nodes
+                        fromResources =
+                            List.filter (\n -> List.member q.id n.outputQueues) model.resources
 
-                        toNode =
-                            List.filter (\n -> n.inputQueue == Just q.id) model.nodes |> List.head
+                        toResource =
+                            List.filter (\n -> n.inputQueue == Just q.id) model.resources |> List.head
                     in
-                    case ( fromNodes, toNode ) of
+                    case ( fromResources, toResource ) of
                         ( fromN :: _, Just toN ) ->
                             [ drawArrowWithQueue fromN toN q ]
 
@@ -346,7 +346,7 @@ svgView model =
                 model.queues
     in
     svg [ width "600", height "500", Svg.Attributes.style "border:1px solid #ccc; background:#fafafa;" ]
-        (queueArrows ++ List.map drawNode model.nodes)
+        (queueArrows ++ List.map drawResource model.resources)
 
 
 main : Program () Model Msg

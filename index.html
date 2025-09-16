@@ -5051,15 +5051,15 @@ var $elm$core$Basics$False = {$: 'False'};
 var $elm$core$Maybe$Just = function (a) {
 	return {$: 'Just', a: a};
 };
+var $elm$core$Maybe$Nothing = {$: 'Nothing'};
 var $elm$core$Basics$identity = function (x) {
 	return x;
 };
-var $author$project$Types$NodeID = function (a) {
-	return {$: 'NodeID', a: a};
-};
-var $elm$core$Maybe$Nothing = {$: 'Nothing'};
 var $author$project$Types$QueueID = function (a) {
 	return {$: 'QueueID', a: a};
+};
+var $author$project$Types$ResourceID = function (a) {
+	return {$: 'ResourceID', a: a};
 };
 var $author$project$Types$Time = function (a) {
 	return {$: 'Time', a: a};
@@ -5074,45 +5074,6 @@ var $author$project$Types$WorkID = function (a) {
 var $author$project$Main$init = {
 	currentTime: $author$project$Types$Time(0),
 	events: _List_Nil,
-	nodes: _List_fromArray(
-		[
-			{
-			busy: false,
-			currentTask: $elm$core$Maybe$Nothing,
-			id: $author$project$Types$NodeID(1),
-			inputQueue: $elm$core$Maybe$Just(
-				$author$project$Types$QueueID(3)),
-			outputQueues: _List_fromArray(
-				[
-					$author$project$Types$QueueID(1)
-				]),
-			view: {x: 100, y: 100}
-		},
-			{
-			busy: false,
-			currentTask: $elm$core$Maybe$Nothing,
-			id: $author$project$Types$NodeID(2),
-			inputQueue: $elm$core$Maybe$Just(
-				$author$project$Types$QueueID(1)),
-			outputQueues: _List_fromArray(
-				[
-					$author$project$Types$QueueID(2)
-				]),
-			view: {x: 300, y: 110}
-		},
-			{
-			busy: false,
-			currentTask: $elm$core$Maybe$Nothing,
-			id: $author$project$Types$NodeID(3),
-			inputQueue: $elm$core$Maybe$Just(
-				$author$project$Types$QueueID(2)),
-			outputQueues: _List_fromArray(
-				[
-					$author$project$Types$QueueID(3)
-				]),
-			view: {x: 310, y: 200}
-		}
-		]),
 	queues: _List_fromArray(
 		[
 			{
@@ -5140,6 +5101,45 @@ var $author$project$Main$init = {
 			{
 			id: $author$project$Types$QueueID(3),
 			tasks: _List_Nil
+		}
+		]),
+	resources: _List_fromArray(
+		[
+			{
+			busy: false,
+			currentTask: $elm$core$Maybe$Nothing,
+			id: $author$project$Types$ResourceID(1),
+			inputQueue: $elm$core$Maybe$Just(
+				$author$project$Types$QueueID(3)),
+			outputQueues: _List_fromArray(
+				[
+					$author$project$Types$QueueID(1)
+				]),
+			view: {x: 100, y: 100}
+		},
+			{
+			busy: false,
+			currentTask: $elm$core$Maybe$Nothing,
+			id: $author$project$Types$ResourceID(2),
+			inputQueue: $elm$core$Maybe$Just(
+				$author$project$Types$QueueID(1)),
+			outputQueues: _List_fromArray(
+				[
+					$author$project$Types$QueueID(2)
+				]),
+			view: {x: 300, y: 110}
+		},
+			{
+			busy: false,
+			currentTask: $elm$core$Maybe$Nothing,
+			id: $author$project$Types$ResourceID(3),
+			inputQueue: $elm$core$Maybe$Just(
+				$author$project$Types$QueueID(2)),
+			outputQueues: _List_fromArray(
+				[
+					$author$project$Types$QueueID(3)
+				]),
+			view: {x: 310, y: 200}
 		}
 		])
 };
@@ -10726,10 +10726,10 @@ var $elm$core$List$partition = F2(
 			_Utils_Tuple2(_List_Nil, _List_Nil),
 			list);
 	});
-var $author$project$Main$partitionInputQueueMatchingNode = F2(
-	function (maybeNode, queues) {
-		if (maybeNode.$ === 'Just') {
-			var n = maybeNode.a;
+var $author$project$Main$partitionInputQueueMatchingResource = F2(
+	function (maybeResource, queues) {
+		if (maybeResource.$ === 'Just') {
+			var n = maybeResource.a;
 			var _v1 = A2(
 				$elm$core$List$partition,
 				function (q) {
@@ -10756,20 +10756,20 @@ var $author$project$Main$partitionInputQueueMatchingNode = F2(
 			return _Utils_Tuple2($elm$core$Maybe$Nothing, queues);
 		}
 	});
-var $author$project$Types$eventNodeID = function (_v0) {
+var $author$project$Types$eventResourceID = function (_v0) {
 	var nid = _v0.b;
 	return nid;
 };
-var $author$project$Main$partitionNodeMatchingEvent = F2(
-	function (event, nodes) {
+var $author$project$Main$partitionResourceMatchingEvent = F2(
+	function (event, resources) {
 		var _v0 = A2(
 			$elm$core$List$partition,
 			function (n) {
 				return _Utils_eq(
 					n.id,
-					$author$project$Types$eventNodeID(event));
+					$author$project$Types$eventResourceID(event));
 			},
-			nodes);
+			resources);
 		var matching = _v0.a;
 		var remaining = _v0.b;
 		if (matching.b) {
@@ -10778,26 +10778,26 @@ var $author$project$Main$partitionNodeMatchingEvent = F2(
 				$elm$core$Maybe$Just(n),
 				remaining);
 		} else {
-			return _Utils_Tuple2($elm$core$Maybe$Nothing, nodes);
+			return _Utils_Tuple2($elm$core$Maybe$Nothing, resources);
 		}
 	});
 var $author$project$Main$fetchTaskFromQueue = F3(
 	function (currentTime, fetchTaskEvents, _v0) {
-		var nodes = _v0.a;
+		var resources = _v0.a;
 		var queues = _v0.b;
 		if (!fetchTaskEvents.b) {
-			return _Utils_Tuple3(nodes, queues, _List_Nil);
+			return _Utils_Tuple3(resources, queues, _List_Nil);
 		} else {
 			var event = fetchTaskEvents.a;
 			var remainingEvents = fetchTaskEvents.b;
-			var _v2 = A2($author$project$Main$partitionNodeMatchingEvent, event, nodes);
-			var node = _v2.a;
-			var remainingNodes = _v2.b;
-			var _v3 = A2($author$project$Main$partitionInputQueueMatchingNode, node, queues);
+			var _v2 = A2($author$project$Main$partitionResourceMatchingEvent, event, resources);
+			var resource = _v2.a;
+			var remainingResources = _v2.b;
+			var _v3 = A2($author$project$Main$partitionInputQueueMatchingResource, resource, queues);
 			var queue = _v3.a;
 			var remainingQueues = _v3.b;
 			var _v4 = function () {
-				var _v5 = _Utils_Tuple2(node, queue);
+				var _v5 = _Utils_Tuple2(resource, queue);
 				if ((_v5.a.$ === 'Just') && (_v5.b.$ === 'Just')) {
 					var n = _v5.a.a;
 					var q = _v5.b.a;
@@ -10832,11 +10832,11 @@ var $author$project$Main$fetchTaskFromQueue = F3(
 					return _Utils_Tuple3($elm$core$Maybe$Nothing, $elm$core$Maybe$Nothing, _List_Nil);
 				}
 			}();
-			var updatedNode = _v4.a;
+			var updatedResource = _v4.a;
 			var updatedQueue = _v4.b;
 			var eventToBeScheduled = _v4.c;
 			var _v7 = function () {
-				var _v8 = _Utils_Tuple2(updatedNode, updatedQueue);
+				var _v8 = _Utils_Tuple2(updatedResource, updatedQueue);
 				if ((_v8.a.$ === 'Just') && (_v8.b.$ === 'Just')) {
 					var un = _v8.a.a;
 					var uq = _v8.b.a;
@@ -10846,7 +10846,7 @@ var $author$project$Main$fetchTaskFromQueue = F3(
 							function (n) {
 								return _Utils_eq(n.id, un.id) ? un : n;
 							},
-							nodes),
+							resources),
 						A2(
 							$elm$core$List$map,
 							function (q) {
@@ -10854,21 +10854,21 @@ var $author$project$Main$fetchTaskFromQueue = F3(
 							},
 							queues));
 				} else {
-					return _Utils_Tuple2(nodes, queues);
+					return _Utils_Tuple2(resources, queues);
 				}
 			}();
-			var updatedNodes = _v7.a;
+			var updatedResources = _v7.a;
 			var updatedQueues = _v7.b;
 			var _v9 = A3(
 				$author$project$Main$fetchTaskFromQueue,
 				currentTime,
 				remainingEvents,
-				_Utils_Tuple2(updatedNodes, updatedQueues));
-			var upNodes = _v9.a;
+				_Utils_Tuple2(updatedResources, updatedQueues));
+			var upResources = _v9.a;
 			var upQueues = _v9.b;
 			var upEvents = _v9.c;
 			return _Utils_Tuple3(
-				upNodes,
+				upResources,
 				upQueues,
 				_Utils_ap(eventToBeScheduled, upEvents));
 		}
@@ -10913,13 +10913,13 @@ var $elm$core$Maybe$andThen = F2(
 			return $elm$core$Maybe$Nothing;
 		}
 	});
-var $author$project$Main$fetchTaskFromNode = function (maybeNode) {
+var $author$project$Main$fetchTaskFromResource = function (maybeResource) {
 	return A2(
 		$elm$core$Maybe$andThen,
 		function ($) {
 			return $.currentTask;
 		},
-		maybeNode);
+		maybeResource);
 };
 var $author$project$Main$compareTaskLength = F2(
 	function (q1, q2) {
@@ -10968,10 +10968,10 @@ var $elm$core$List$member = F2(
 			xs);
 	});
 var $elm$core$List$sortWith = _List_sortWith;
-var $author$project$Main$partitionOutputQueueMatchingNode = F2(
-	function (maybeNode, queues) {
-		if (maybeNode.$ === 'Just') {
-			var n = maybeNode.a;
+var $author$project$Main$partitionOutputQueueMatchingResource = F2(
+	function (maybeResource, queues) {
+		if (maybeResource.$ === 'Just') {
+			var n = maybeResource.a;
 			var _v1 = A2(
 				$elm$core$List$partition,
 				function (q) {
@@ -11007,22 +11007,22 @@ var $author$project$Main$pushTaskToQueue = F2(
 	function (serviceCompleteEvents, _v0) {
 		pushTaskToQueue:
 		while (true) {
-			var nodes = _v0.a;
+			var resources = _v0.a;
 			var queues = _v0.b;
 			if (!serviceCompleteEvents.b) {
-				return _Utils_Tuple2(nodes, queues);
+				return _Utils_Tuple2(resources, queues);
 			} else {
 				var event = serviceCompleteEvents.a;
 				var remainingEvents = serviceCompleteEvents.b;
-				var _v2 = A2($author$project$Main$partitionNodeMatchingEvent, event, nodes);
-				var node = _v2.a;
-				var remainingNodes = _v2.b;
-				var _v3 = A2($author$project$Main$partitionOutputQueueMatchingNode, node, queues);
+				var _v2 = A2($author$project$Main$partitionResourceMatchingEvent, event, resources);
+				var resource = _v2.a;
+				var remainingResources = _v2.b;
+				var task = $author$project$Main$fetchTaskFromResource(resource);
+				var _v3 = A2($author$project$Main$partitionOutputQueueMatchingResource, resource, queues);
 				var queue = _v3.a;
 				var remainingQueues = _v3.b;
-				var task = $author$project$Main$fetchTaskFromNode(node);
 				var _v4 = function () {
-					var _v5 = _Utils_Tuple3(node, queue, task);
+					var _v5 = _Utils_Tuple3(resource, queue, task);
 					if (((_v5.a.$ === 'Just') && (_v5.b.$ === 'Just')) && (_v5.c.$ === 'Just')) {
 						var n = _v5.a.a;
 						var q = _v5.b.a;
@@ -11033,7 +11033,7 @@ var $author$project$Main$pushTaskToQueue = F2(
 								_Utils_update(
 									n,
 									{busy: false, currentTask: $elm$core$Maybe$Nothing}),
-								remainingNodes),
+								remainingResources),
 							A2(
 								$elm$core$List$cons,
 								_Utils_update(
@@ -11046,13 +11046,13 @@ var $author$project$Main$pushTaskToQueue = F2(
 									}),
 								remainingQueues));
 					} else {
-						return _Utils_Tuple2(nodes, queues);
+						return _Utils_Tuple2(resources, queues);
 					}
 				}();
-				var updatedNodes = _v4.a;
+				var updatedResources = _v4.a;
 				var updatedQueues = _v4.b;
 				var $temp$serviceCompleteEvents = remainingEvents,
-					$temp$_v0 = _Utils_Tuple2(updatedNodes, updatedQueues);
+					$temp$_v0 = _Utils_Tuple2(updatedResources, updatedQueues);
 				serviceCompleteEvents = $temp$serviceCompleteEvents;
 				_v0 = $temp$_v0;
 				continue pushTaskToQueue;
@@ -11070,22 +11070,22 @@ var $author$project$Main$executeOnCurrentEvents = F3(
 			A2(
 				$author$project$Main$pushTaskToQueue,
 				serviceCompleteEvents,
-				_Utils_Tuple2(model.nodes, model.queues)));
-		var changedNodes = _v0.a;
+				_Utils_Tuple2(model.resources, model.queues)));
+		var changedResources = _v0.a;
 		var changedQueues = _v0.b;
 		var newEvents = _v0.c;
 		var nextModelEvents = _Utils_ap(laterEvents, newEvents);
 		return _Utils_update(
 			model,
-			{events: nextModelEvents, nodes: changedNodes, queues: changedQueues});
+			{events: nextModelEvents, queues: changedQueues, resources: changedResources});
 	});
 var $author$project$Main$processNextStep = function (model) {
-	var idleNodes = A2(
+	var idleResources = A2(
 		$elm$core$List$filter,
 		function (n) {
 			return (!_Utils_eq(n.inputQueue, $elm$core$Maybe$Nothing)) && (!n.busy);
 		},
-		model.nodes);
+		model.resources);
 	var updatedEvents = _Utils_ap(
 		model.events,
 		A2(
@@ -11093,7 +11093,7 @@ var $author$project$Main$processNextStep = function (model) {
 			function (n) {
 				return A3($author$project$Types$Event, model.currentTime, n.id, $author$project$Types$FetchTask);
 			},
-			idleNodes));
+			idleResources));
 	var sortedEvents = A2($elm$core$List$sortWith, $author$project$Types$compareEventTimes, updatedEvents);
 	var _v0 = A2(
 		$elm$core$List$partition,
@@ -11120,7 +11120,7 @@ var $author$project$Main$update = F2(
 		return $author$project$Main$processNextStep(model);
 	});
 var $author$project$Main$StepSimulation = {$: 'StepSimulation'};
-var $author$project$Types$fetchNodeID = function (_v0) {
+var $author$project$Types$fetchResourceID = function (_v0) {
 	var nid = _v0.a;
 	return nid;
 };
@@ -11129,14 +11129,14 @@ var $author$project$Main$eventToString = function (e) {
 		$author$project$Types$fetchTime(
 			$author$project$Types$eventTime(e)));
 	var nid = $elm$core$String$fromInt(
-		$author$project$Types$fetchNodeID(
-			$author$project$Types$eventNodeID(e)));
+		$author$project$Types$fetchResourceID(
+			$author$project$Types$eventResourceID(e)));
 	var etype = function () {
 		var _v0 = $author$project$Types$eventType(e);
 		if (_v0.$ === 'ServiceComplete') {
-			return 'ServiceComplete at node ' + nid;
+			return 'ServiceComplete at resource ' + nid;
 		} else {
-			return 'FetchTask at node ' + nid;
+			return 'FetchTask at resource ' + nid;
 		}
 	}();
 	return time + (': ' + etype);
@@ -11169,7 +11169,7 @@ var $elm$svg$Svg$Attributes$x1 = _VirtualDom_attribute('x1');
 var $elm$svg$Svg$Attributes$x2 = _VirtualDom_attribute('x2');
 var $elm$svg$Svg$Attributes$y1 = _VirtualDom_attribute('y1');
 var $elm$svg$Svg$Attributes$y2 = _VirtualDom_attribute('y2');
-var $author$project$NodeView$drawArrowWithQueue = F3(
+var $author$project$ResourceView$drawArrowWithQueue = F3(
 	function (fromN, toN, q) {
 		var y2Pos = toN.view.y;
 		var y1Pos = fromN.view.y;
@@ -11267,7 +11267,7 @@ var $elm$svg$Svg$text = $elm$virtual_dom$VirtualDom$text;
 var $elm$svg$Svg$text_ = $elm$svg$Svg$trustedNode('text');
 var $elm$svg$Svg$Attributes$x = _VirtualDom_attribute('x');
 var $elm$svg$Svg$Attributes$y = _VirtualDom_attribute('y');
-var $author$project$NodeView$drawNode = function (n) {
+var $author$project$ResourceView$drawResource = function (n) {
 	var yPos = n.view.y;
 	var xPos = n.view.x;
 	var taskText = function () {
@@ -11315,7 +11315,7 @@ var $author$project$NodeView$drawNode = function (n) {
 					[
 						$elm$svg$Svg$text(
 						'N' + $elm$core$String$fromInt(
-							$author$project$Types$fetchNodeID(n.id)))
+							$author$project$Types$fetchResourceID(n.id)))
 					])),
 				A2(
 				$elm$svg$Svg$text_,
@@ -11342,7 +11342,7 @@ var $author$project$Main$svgView = function (model) {
 	var queueArrows = A2(
 		$elm$core$List$concatMap,
 		function (q) {
-			var toNode = $elm$core$List$head(
+			var toResource = $elm$core$List$head(
 				A2(
 					$elm$core$List$filter,
 					function (n) {
@@ -11350,21 +11350,21 @@ var $author$project$Main$svgView = function (model) {
 							n.inputQueue,
 							$elm$core$Maybe$Just(q.id));
 					},
-					model.nodes));
-			var fromNodes = A2(
+					model.resources));
+			var fromResources = A2(
 				$elm$core$List$filter,
 				function (n) {
 					return A2($elm$core$List$member, q.id, n.outputQueues);
 				},
-				model.nodes);
-			var _v0 = _Utils_Tuple2(fromNodes, toNode);
+				model.resources);
+			var _v0 = _Utils_Tuple2(fromResources, toResource);
 			if (_v0.a.b && (_v0.b.$ === 'Just')) {
 				var _v1 = _v0.a;
 				var fromN = _v1.a;
 				var toN = _v0.b.a;
 				return _List_fromArray(
 					[
-						A3($author$project$NodeView$drawArrowWithQueue, fromN, toN, q)
+						A3($author$project$ResourceView$drawArrowWithQueue, fromN, toN, q)
 					]);
 			} else {
 				return _List_Nil;
@@ -11381,7 +11381,7 @@ var $author$project$Main$svgView = function (model) {
 			]),
 		_Utils_ap(
 			queueArrows,
-			A2($elm$core$List$map, $author$project$NodeView$drawNode, model.nodes)));
+			A2($elm$core$List$map, $author$project$ResourceView$drawResource, model.resources)));
 };
 var $author$project$Main$view = function (model) {
 	return A2(
@@ -11389,7 +11389,7 @@ var $author$project$Main$view = function (model) {
 		_List_Nil,
 		_List_fromArray(
 			[
-				$elm$html$Html$text('Minimal Node Simulation'),
+				$elm$html$Html$text('Minimal Resource Simulation'),
 				$author$project$Main$svgView(model),
 				A2(
 				$elm$html$Html$button,
