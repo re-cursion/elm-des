@@ -1,7 +1,11 @@
-module Types exposing (Time(..), Event(..), EventType(..), Model, Resource, ResourceID(..), cmpResourceID, ResourceViewInfo, QueueID(..), Work, WorkID(..), fetchResourceID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventResourceID, addTimes, eventType)
+module Types exposing (Event(..), EventType(..), Model, Resource, ResourceID(..), cmpResourceID, ResourceViewInfo, QueueID(..), fetchResourceID, fetchQueueID, eventTime, compareEventTimes, eventResourceID, eventType)
 
 import Dict exposing (Dict)
 import Process exposing (Id)
+import Work exposing (Work)
+import EventTime exposing (EventTime, compareTimes) 
+import Event exposing (..)
+
 
 
 type alias ResourceViewInfo =
@@ -19,24 +23,15 @@ type EventType
 --    | Interrupt
 
 
-type Time 
-    = Time Int
-
-fetchTime : Time -> Int
-fetchTime (Time time)
-    = time
 
 
-addTimes : Time -> Time -> Time
-addTimes t0 t1 = 
-    (Time ((t0 |> fetchTime) + (t1 |> fetchTime)))
 
 
 type Event =
-    Event Time ResourceID EventType
+    Event EventTime ResourceID EventType
 
 
-eventTime : Event -> Time
+eventTime : Event -> EventTime
 eventTime (Event time _ _) = 
     time
 
@@ -51,9 +46,6 @@ eventResourceID (Event _ nid _) =
 
 
 
-compareTimes : Time -> Time -> Order
-compareTimes tim0 tim1 = 
-    (compare (tim0 |> fetchTime) (tim1 |> fetchTime))
 
 
 compareEventTimes : Event -> Event -> Order
@@ -65,12 +57,10 @@ type alias Model =
     { resources : Dict Int Resource
   --  , queues : Dict Int Queue
     , events : List Event
-    , currentTime : Time
+    , currentTime : EventTime
     }
 
 
-type WorkID
-    = WorkID Int
 
 
 type QueueID
@@ -83,9 +73,7 @@ type ResourceID
 cmpResourceID : ResourceID -> ResourceID -> Order
 cmpResourceID lhs rhs = Basics.compare (fetchResourceID lhs) (fetchResourceID rhs)
 
-fetchWorkID : WorkID -> Int
-fetchWorkID (WorkID tid) =
-    tid
+
 
 
 fetchQueueID : QueueID -> Int
@@ -100,10 +88,6 @@ fetchResourceID (ResourceID nid) =
 
 
 
-type alias Work =
-    { id : WorkID
-    , serviceTime : Time
-    }
 
 
 

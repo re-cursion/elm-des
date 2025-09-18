@@ -1,6 +1,7 @@
-module Queue exposing (Queue(..), put, take, tasks, Behaviour(..), PutResult, QueueConfig, config)
+module Queue exposing (Queue(..), put, take, tasks, Behaviour(..), PutResult(..), QueueConfig, config)
 
-import Types exposing (Work)
+import Work exposing (..)
+
 
 
 type Behaviour
@@ -32,8 +33,8 @@ config (Queue cfg _) = cfg
 
 
 
-put : Queue -> Work -> (Queue, PutResult)
-put queue work = 
+put : Work -> Queue -> (Queue, PutResult)
+put work queue = 
     let
         cfg = config queue
         max = cfg.size
@@ -47,9 +48,9 @@ put queue work =
             Block -> 
                 (Queue cfg (tasks queue), Blocked)
             DropFirst ->
-                (Queue cfg (tasks queue |> List.drop 1 |> List.append [work]), FirstDropped)
+                (Queue cfg ([work] |> List.append (tasks queue |> List.drop 1)), FirstDropped)
             DropLast ->
-                (Queue cfg (tasks queue |> List.take (max - 1) |> List.append [work]), LastDropped)
+                (Queue cfg ([work] |> List.append (tasks queue |> List.take (max - 1))), LastDropped)
 
 
 
