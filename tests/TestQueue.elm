@@ -24,7 +24,7 @@ workN : Int -> Work
 workN n = Work (WorkID n) (EventTime 10)
 
 suite : Test
-suite =
+suite = 
     describe "Queue module"
         [ describe "putting and testing queue"
             [ test "create " <|
