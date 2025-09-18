@@ -27,11 +27,25 @@ cmpResourceID : ResourceID -> ResourceID -> Order
 cmpResourceID lhs rhs = Basics.compare (fetchResourceID lhs) (fetchResourceID rhs)
 
 
+type ResourceState
+    = Idle
+    | Busy
+--    | Interrupted
 
-type alias Resource =
-    { inputQueue : Maybe QueueID
-    , outputQueues : List QueueID
-   -- , view : ResourceViewInfo
-    , busy : Bool
-    , currentTask : Maybe Work
-    }
+
+
+type Resource
+    = Resource (Maybe QueueID) (List QueueID) ResourceState (Maybe Work)
+    --  | Generator QueueID
+    --  | Interruptor (List QueueID)
+
+
+createResource : (Maybe QueueID) -> (List QueueID) -> Resource
+createResource inp out = Resource inp out Idle Nothing
+
+
+input : Resource -> Maybe QueueID
+input (Resource inp _ _ _) = inp
+
+output : Resource -> List QueueID
+output (Resource _ out _ _) = out

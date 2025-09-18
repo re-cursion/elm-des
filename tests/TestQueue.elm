@@ -1,5 +1,6 @@
 module TestQueue exposing (..)
 
+
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
 import Test exposing (..)
@@ -23,8 +24,8 @@ lastElement = List.foldl (Just >> always) Nothing
 workN : Int -> Work
 workN n = Work (WorkID n) (EventTime 10)
 
-suite : Test
-suite = 
+queueTestSuite : Test
+queueTestSuite = 
     describe "Queue module"
         [ describe "putting and testing queue"
             [ test "create " <|
