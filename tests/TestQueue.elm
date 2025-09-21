@@ -5,7 +5,7 @@ import EventTime exposing (EventTime(..))
 import Expect exposing (Expectation)
 import Fuzz exposing (Fuzzer, int, list, string)
 import Html exposing (a)
-import Queue exposing (Behaviour(..), PutResult(..), Queue(..), config, put, take, tasks)
+import Queue exposing (Behaviour(..), PutResult(..), Queue(..), config, put, putQueue, putResult, take, tasks)
 import Test exposing (..)
 import Tuple exposing (..)
 import Types exposing (..)
@@ -54,48 +54,60 @@ queueTestSuite =
             , test "put work onto the queue" <|
                 \_ ->
                     let
-                        ( queue, result ) =
+                        pr =
                             Queue { size = 5, behaviour = DropFirst } []
                                 |> put (workN 1)
-                                |> first
+                                |> putQueue
                                 |> put (workN 2)
-                                |> first
+                                |> putQueue
                                 |> put (workN 3)
-                                |> first
+                                |> putQueue
                                 |> put (workN 4)
-                                |> first
+                                |> putQueue
                                 |> put (workN 5)
+
+                        queue =
+                            pr |> putQueue
+
+                        result =
+                            pr |> putResult
                     in
                     expectAll
                         [ Expect.equal (queue |> tasks |> List.length) 5
                         , Expect.equal (queue |> tasks |> lastElement) (Just (workN 5))
-                        , Expect.equal result Queue.Ok
+                        , Expect.equal result "Ok"
                         ]
             , test "put more work onto the queue than allowed, DropFirst" <|
                 \_ ->
                     let
-                        ( queue, _ ) =
+                        pr =
                             Queue { size = 5, behaviour = DropFirst } []
                                 |> put (workN 1)
-                                |> first
+                                |> putQueue
                                 |> put (workN 2)
-                                |> first
+                                |> putQueue
                                 |> put (workN 3)
-                                |> first
+                                |> putQueue
                                 |> put (workN 4)
-                                |> first
+                                |> putQueue
                                 |> put (workN 5)
 
                         element =
                             workN 6
 
-                        ( updatedQueue, result ) =
-                            put element queue
+                        pr2 =
+                            put element (putQueue pr)
+
+                        updatedQueue =
+                            pr2 |> putQueue
+
+                        result =
+                            pr2 |> putResult
                     in
                     expectAll
                         [ Expect.equal (updatedQueue |> tasks |> List.length) 5
-                        , Expect.equal result FirstDropped
-                        , Expect.equal (tasks updatedQueue |> lastElement) (Just element) |> Expect.onFail (Debug.toString queue)
+                        , Expect.equal result "FirstDropped"
+                        , Expect.equal (tasks updatedQueue |> lastElement) (Just element) |> Expect.onFail (Debug.toString updatedQueue)
                         ]
             , test "put more work onto the queue than allowed, DropLast" <|
                 \_ ->
@@ -103,25 +115,25 @@ queueTestSuite =
                         element =
                             workN 1
 
-                        ( queue, _ ) =
+                        pr =
                             Queue { size = 5, behaviour = DropLast } []
                                 |> put element
-                                |> first
+                                |> putQueue
                                 |> put (workN 2)
-                                |> first
+                                |> putQueue
                                 |> put (workN 3)
-                                |> first
+                                |> putQueue
                                 |> put (workN 4)
-                                |> first
+                                |> putQueue
                                 |> put (workN 5)
 
-                        ( updatedQueue, result ) =
-                            put (workN 6) queue
+                        pr2 =
+                            put (workN 6) (putQueue pr)
                     in
                     expectAll
-                        [ Expect.equal (updatedQueue |> tasks |> List.length) 5
-                        , Expect.equal result LastDropped
-                        , Expect.equal (tasks updatedQueue |> List.head) (Just (workN 1)) |> Expect.onFail (Debug.toString queue)
+                        [ Expect.equal (pr2 |> putQueue |> tasks |> List.length) 5
+                        , Expect.equal (pr2 |> putResult) "LastDropped"
+                        , Expect.equal (tasks (pr2 |> putQueue) |> List.head) (Just (workN 1)) |> Expect.onFail (Debug.toString (pr2 |> putQueue))
                         ]
             , test "put more work onto the queue than allowed, Block" <|
                 \_ ->
@@ -129,41 +141,42 @@ queueTestSuite =
                         element =
                             workN 1
 
-                        ( queue, _ ) =
+                        pr =
                             Queue { size = 5, behaviour = Block } []
                                 |> put element
-                                |> first
+                                |> putQueue
                                 |> put (workN 2)
-                                |> first
+                                |> putQueue
                                 |> put (workN 3)
-                                |> first
+                                |> putQueue
                                 |> put (workN 4)
-                                |> first
+                                |> putQueue
                                 |> put (workN 5)
 
-                        ( updatedQueue, result ) =
-                            put (workN 6) queue
+                        pr2 =
+                            put (workN 6) (pr |> putQueue)
                     in
                     expectAll
-                        [ Expect.equal (updatedQueue |> tasks |> List.length) 5
-                        , Expect.equal result Blocked
-                        , Expect.equal (tasks updatedQueue |> List.head) (Just (workN 1)) |> Expect.onFail (Debug.toString queue)
-                        , Expect.equal (tasks updatedQueue |> lastElement) (Just (workN 5)) |> Expect.onFail (Debug.toString queue)
+                        [ Expect.equal (pr2 |> putQueue |> tasks |> List.length) 5
+                        , Expect.equal (pr2 |> putResult) "Blocked"
+                        , Expect.equal (tasks (pr2 |> putQueue) |> List.head) (Just (workN 1)) |> Expect.onFail (Debug.toString (pr2 |> putQueue))
+                        , Expect.equal (tasks (pr2 |> putQueue) |> lastElement) (Just (workN 5)) |> Expect.onFail (Debug.toString (pr2 |> putQueue))
                         ]
             , test "take work from the queue" <|
                 \_ ->
                     let
-                        ( queue, _ ) =
+                        queue =
                             Queue { size = 5, behaviour = Block } []
                                 |> put (workN 1)
-                                |> first
+                                |> putQueue
                                 |> put (workN 2)
-                                |> first
+                                |> putQueue
                                 |> put (workN 3)
-                                |> first
+                                |> putQueue
                                 |> put (workN 4)
-                                |> first
+                                |> putQueue
                                 |> put (workN 5)
+                                |> putQueue
 
                         ( maybeWork, remaining ) =
                             take queue
@@ -175,17 +188,18 @@ queueTestSuite =
             , test "take all the work from the queue and one more" <|
                 \_ ->
                     let
-                        ( queue, _ ) =
+                        queue =
                             Queue { size = 5, behaviour = Block } []
                                 |> put (workN 1)
-                                |> first
+                                |> putQueue
                                 |> put (workN 2)
-                                |> first
+                                |> putQueue
                                 |> put (workN 3)
-                                |> first
+                                |> putQueue
                                 |> put (workN 4)
-                                |> first
+                                |> putQueue
                                 |> put (workN 5)
+                                |> putQueue
 
                         ( maybeWork, remaining ) =
                             take queue |> second |> take |> second |> take |> second |> take |> second |> take |> second |> take
