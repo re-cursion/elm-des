@@ -1,9 +1,10 @@
+module Work exposing (Work(..), WorkID(..), fetchWorkID)
 
-module Work exposing (WorkID(..), Work, fetchWorkID)
-
+import Dict exposing (Dict)
 import EventTime exposing (EventTime)
 
-type WorkID 
+
+type WorkID
     = WorkID Int
 
 
@@ -12,10 +13,5 @@ fetchWorkID (WorkID tid) =
     tid
 
 
-type alias Work =
-    { id : WorkID
-    , serviceTime : EventTime
-    }
-
-
-
+type Work
+    = Work WorkID (Dict Int EventTime)

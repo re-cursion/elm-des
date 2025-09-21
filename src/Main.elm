@@ -1,25 +1,30 @@
 module Main exposing (..)
 
 import Browser
+import Dict exposing (Dict)
 import Html exposing (Html, button, div, li, ul)
 import Html.Events exposing (onClick)
+import Queue exposing (..)
+import Resource exposing (..)
 import ResourceView exposing (drawArrowWithQueue, drawResource)
 import Svg exposing (svg)
 import Svg.Attributes exposing (..)
-import Types exposing (Time(..), Event(..), EventType(..), Model, Resource, ResourceID(..), cmpResourceID, Queue, QueueID(..), Work, WorkID(..), fetchResourceID, fetchQueueID, fetchWorkID, eventTime, fetchTime, compareEventTimes, compareTimes, eventResourceID, addTimes, eventType)
-import Dict exposing (Dict)
+import Types exposing (..)
+
 
 init =
-    { resources = Dict.fromList
-        [ (1 , { inputQueue = Just (QueueID 3), outputQueues = [ (QueueID 1) ], view = { x = 100, y = 100 }, busy = False, currentTask = Nothing })
-        , (2 , { inputQueue = Just (QueueID 1), outputQueues = [ (QueueID 2) ], view = { x = 300, y = 110 }, busy = False, currentTask = Nothing })
-        , (3 , { inputQueue = Just (QueueID 2), outputQueues = [ (QueueID 3) ], view = { x = 310, y = 200 }, busy = False, currentTask = Nothing })
-        ]
-    , queues = Dict.fromList
-        [ (1, { tasks = [ Work (WorkID 1) (Time 5), Work (WorkID 2) (Time 7), Work (WorkID 3) (Time 2) ] })
-        , (2, { tasks = [] })
-        , (3, { tasks = [] })
-        ]
+    { resources =
+        Dict.fromList
+            [ ( 1, Resource (Just (QueueID 3)) [ QueueID 1 ] Idle Nothing )
+            , ( 2, Resource (Just (QueueID 1)) [ QueueID 2 ] Idle Nothing )
+            , ( 3, Resource (Just (QueueID 2)) [ QueueID 3 ] Idle Nothing )
+            ]
+    , queues =
+        Dict.fromList
+            [ ( 1, { tasks = [ Work (WorkID 1) (Time 5), Work (WorkID 2) (Time 7), Work (WorkID 3) (Time 2) ] } )
+            , ( 2, { tasks = [] } )
+            , ( 3, { tasks = [] } )
+            ]
     , events =
         []
     , currentTime = Time 0
@@ -45,7 +50,7 @@ processNextStep model =
             Dict.filter (\_ resource -> resource.inputQueue /= Nothing && not resource.busy) model.resources
 
         updatedEvents =
-            model.events ++ (idleResources |> Dict.keys |> List.map (\id -> Event model.currentTime (ResourceID id) FetchTask ) )
+            model.events ++ (idleResources |> Dict.keys |> List.map (\id -> Event model.currentTime (ResourceID id) FetchTask))
 
         -- sort events by time
         sortedEvents =
@@ -58,7 +63,7 @@ processNextStep model =
             executeOnCurrentEvents model currentEvents laterEvents
     in
     { stepPlusOneModel
-        | currentTime = (Time ((stepPlusOneModel.currentTime |> fetchTime) + 1))
+        | currentTime = Time ((stepPlusOneModel.currentTime |> fetchTime) + 1)
         , events = stepPlusOneModel.events
     }
 
@@ -67,7 +72,7 @@ partitionResourceMatchingEvent : Event -> List Resource -> ( Maybe Resource, Lis
 partitionResourceMatchingEvent event resources =
     let
         ( matching, remaining ) =
-            List.partition (\n -> n.id == (eventResourceID event)) resources
+            List.partition (\n -> n.id == eventResourceID event) resources
     in
     case matching of
         n :: _ ->
@@ -122,7 +127,7 @@ partitionOutputQueueMatchingResource maybeResource queues =
                     in
                     case leastBusiestQueue of
                         Just lbq ->
-                            ( Just lbq, (queues |> List.filter (\x -> x.id /= lbq.id)) )
+                            ( Just lbq, queues |> List.filter (\x -> x.id /= lbq.id) )
 
                         Nothing ->
                             ( Nothing, queues )
@@ -171,7 +176,7 @@ fetchTaskFromQueue currentTime fetchTaskEvents ( resources, queues ) =
                                 hd :: tl ->
                                     ( Just { n | busy = True, currentTask = Just hd }
                                     , Just { q | tasks = tl }
-                                    , [ (Event (addTimes currentTime hd.serviceTime) n.id ServiceComplete)]
+                                    , [ Event (addTimes currentTime hd.serviceTime) n.id ServiceComplete ]
                                       -- schedule service complete event
                                     )
 
@@ -208,7 +213,6 @@ fetchTaskFromQueue currentTime fetchTaskEvents ( resources, queues ) =
                 -- if there are more fetch events, process them (recursively)
                 ( upResources, upQueues, upEvents ) =
                     fetchTaskFromQueue currentTime remainingEvents ( updatedResources, updatedQueues )
-
             in
             ( upResources, upQueues, eventToBeScheduled ++ upEvents )
 
@@ -255,7 +259,7 @@ pushTaskToQueue serviceCompleteEvents ( resources, queues ) =
 
 isServiceCompleteEvent : Event -> Bool
 isServiceCompleteEvent e =
-    case (e |> eventType) of
+    case e |> eventType of
         ServiceComplete ->
             True
 
@@ -265,7 +269,7 @@ isServiceCompleteEvent e =
 
 isFetchTaskEvent : Event -> Bool
 isFetchTaskEvent e =
-    case (e |> eventType) of
+    case e |> eventType of
         FetchTask ->
             True
 
@@ -310,8 +314,12 @@ view model =
 eventToString : Event -> String
 eventToString e =
     let
-        nid = e |> eventResourceID |> fetchResourceID |> String.fromInt
-        time = e |> eventTime |> fetchTime |> String.fromInt
+        nid =
+            e |> eventResourceID |> fetchResourceID |> String.fromInt
+
+        time =
+            e |> eventTime |> fetchTime |> String.fromInt
+
         etype =
             case e |> eventType of
                 ServiceComplete ->
