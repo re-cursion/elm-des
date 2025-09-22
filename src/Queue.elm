@@ -10,34 +10,11 @@ type Behaviour
 
 
 
--- type PutResultType
---     = Ok
---     | FirstDropped
---     | LastDropped
---     | Blocked
--- type PutResult
---     = PutResultType Queue
--- putQueue : PutResult -> Queue
--- putQueue (PutResultType queue) =
---     queue
--- putResult : PutResult -> PutResultType
--- putResult result =
---     case result of
---         Ok _ ->
---             Ok
---         FirstDropped _ ->
---             FirstDropped
---         LastDropped _ ->
---             LastDropped
---         Blocked _ ->
---             Blocked
 
 
 type PutResult
     = Ok Queue
-    | FirstDropped Queue
-    | LastDropped Queue
-    | Blocked Queue
+    | Err Behaviour Queue 
 
 
 putQueue : PutResult -> Queue
@@ -46,13 +23,13 @@ putQueue result =
         Ok queue ->
             queue
 
-        FirstDropped queue ->
+        Err DropFirst queue ->
             queue
 
-        LastDropped queue ->
+        Err DropLast queue ->
             queue
 
-        Blocked queue ->
+        Err Block queue ->
             queue
 
 
@@ -62,13 +39,13 @@ putResult result =
         Ok _ ->
             "Ok"
 
-        FirstDropped _ ->
+        Err DropFirst _ ->
             "FirstDropped"
 
-        LastDropped _ ->
+        Err DropLast _ ->
             "LastDropped"
 
-        Blocked _ ->
+        Err Block _ ->
             "Blocked"
 
 
@@ -112,13 +89,13 @@ put work queue =
     else
         case cfg.behaviour of
             Block ->
-                Blocked (Queue cfg (tasks queue))
+                Err Block (Queue cfg (tasks queue))
 
             DropFirst ->
-                FirstDropped (Queue cfg ([ work ] |> List.append (tasks queue |> List.drop 1)))
+                Err DropFirst (Queue cfg ([ work ] |> List.append (tasks queue |> List.drop 1)))
 
             DropLast ->
-                LastDropped (Queue cfg ([ work ] |> List.append (tasks queue |> List.take (max - 1))))
+                Err DropLast (Queue cfg ([ work ] |> List.append (tasks queue |> List.take (max - 1))))
 
 
 take : Queue -> ( Maybe Work, Queue )

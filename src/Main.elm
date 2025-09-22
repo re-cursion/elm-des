@@ -6,6 +6,8 @@ import Html exposing (Html, button, div, li, ul)
 import Html.Events exposing (onClick)
 import Queue exposing (..)
 import Resource exposing (..)
+import Work exposing (Work(..), WorkID(..))
+import EventTime exposing (EventTime(..))
 import ResourceView exposing (drawArrowWithQueue, drawResource)
 import Svg exposing (svg)
 import Svg.Attributes exposing (..)
@@ -21,13 +23,16 @@ init =
             ]
     , queues =
         Dict.fromList
-            [ ( 1, { tasks = [ Work (WorkID 1) (Time 5), Work (WorkID 2) (Time 7), Work (WorkID 3) (Time 2) ] } )
+            [ ( 1, { tasks = [  Work (WorkID 1) (Dict.fromList [(1, EventTime 5)]), 
+                                Work (WorkID 2) (Dict.fromList [(2, EventTime 5)]), 
+                                Work (WorkID 3) (Dict.fromList [(3, EventTime 5)]) 
+                            ] } )
             , ( 2, { tasks = [] } )
             , ( 3, { tasks = [] } )
             ]
     , events =
         []
-    , currentTime = Time 0
+    , currentTime = EventTime 0
     }
 
 
