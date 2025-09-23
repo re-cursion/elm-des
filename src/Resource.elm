@@ -57,3 +57,17 @@ input (Resource inp _ _ _) =
 output : Resource -> List QueueID
 output (Resource _ out _ _) =
     out
+
+
+state : Resource -> ResourceState
+state  (Resource _ _ st _) =
+    st
+
+
+putWork2Resource : (Maybe Work) -> Resource -> Resource
+putWork2Resource maybework (Resource inp out st _) = 
+    case maybework of
+        Just work ->
+            Resource inp out Busy (Just work)
+        Nothing ->
+            Resource inp out st Nothing
