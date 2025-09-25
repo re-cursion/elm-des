@@ -45,7 +45,7 @@ interactionTestSuite =
                         resource = createResource maybeQueueId [(QueueID 3), (QueueID 7)]
                         -- take work from queue and put it into the resource
                         -- queue2Resource queue (resid, resource) eventtime = 
-                        result = queue2Resource queue ((ResourceID 1), resource) (EventTime 7)
+                        result = queue2Resource queue ((ResourceID 2), resource) (EventTime 7)
                         (queue_, resource_, events_) = case result of
                             InteractionResult q r e ->
                                 (q, r, e)
@@ -53,7 +53,7 @@ interactionTestSuite =
                     expectAll
                         [ Expect.equal (queue_ |> tasks |> List.length) 0
                         , Expect.equal (resource_ |> resourceWork) (Just work)
-                        , Expect.equal (events_ |> List.head |> Maybe.andThen (\evt -> (Just (eventTime evt)))) (Just (EventTime 18))]
+                        , Expect.equal (events_ |> List.head |> Maybe.andThen (\evt -> (Just (eventTime evt)))) (Just (EventTime 29))]
             ]
         ]
 --    todo "Implement our first test. See https://package.elm-lang.org/packages/elm-explorations/test/latest for how to do this!"
