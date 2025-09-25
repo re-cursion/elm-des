@@ -64,6 +64,11 @@ state  (Resource _ _ st _) =
     st
 
 
+resourceWork : Resource -> Maybe Work
+resourceWork (Resource _ _ _ w) = 
+    w
+
+
 putWork2Resource : (Maybe Work) -> Resource -> Resource
 putWork2Resource maybework (Resource inp out st _) = 
     case maybework of
