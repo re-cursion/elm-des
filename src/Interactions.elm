@@ -27,8 +27,8 @@ work2EventTime (Work _ times) (ResourceID resid) =
             EventTime 0
 
 
-queue2Resource : Queue -> ( ResourceID, Resource ) -> EventTime -> InteractionResult
-queue2Resource queue ( resid, resource ) eventtime =
+queue2Resource : EventTime -> Queue -> ( ResourceID, Resource ) -> InteractionResult
+queue2Resource eventtime queue ( resid, resource ) =
     case state resource of
         Busy ->
             InteractionResult queue resource []
@@ -55,5 +55,5 @@ queue2Resource queue ( resid, resource ) eventtime =
 
 
 -- do nothing. Just return the same queue and resource which came in
--- resource2Queue : (ResourceID, Resource) -> Queue -> EventTime -> InteractionResult
--- resource2Queue (resid, resource) queue eventtime =
+--resource2Queue : (ResourceID, Resource) -> Queue -> EventTime -> InteractionResult
+--resource2Queue (resid, resource) queue eventtime =

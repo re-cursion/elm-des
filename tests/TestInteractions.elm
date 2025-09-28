@@ -52,7 +52,7 @@ interactionTestSuite =
 
                         -- take work from queue and put it into the resource
                         result =
-                            queue2Resource queue ( ResourceID 2, resource ) (EventTime 7)
+                            queue2Resource (EventTime 7) queue ( ResourceID 2, resource )
 
                         ( queue_, resource_, events_ ) =
                             case result of
@@ -61,7 +61,7 @@ interactionTestSuite =
                     in
                     expectAll
                         [ Expect.equal (queue_ |> tasks |> List.length) 0
-                        , Expect.equal (resource_ |> resourceWork) (Just work)
+                        , Expect.equal (resource_ |> fetchWork) (Just work)
                         , Expect.equal (events_ |> List.head |> Maybe.andThen (\evt -> Just (eventTime evt))) (Just (EventTime 29))
                         ]
             , test "empty queue -> resource " <|
@@ -78,7 +78,7 @@ interactionTestSuite =
 
                         -- take work from queue and put it into the resource
                         result =
-                            queue2Resource queue ( ResourceID 2, resource ) (EventTime 7)
+                            queue2Resource (EventTime 7) queue ( ResourceID 2, resource )
 
                         ( queue_, resource_, events_ ) =
                             case result of
@@ -87,7 +87,7 @@ interactionTestSuite =
                     in
                     expectAll
                         [ Expect.equal (queue_ |> tasks |> List.length) 0
-                        , Expect.equal (resource_ |> resourceWork) Nothing
+                        , Expect.equal (resource_ |> fetchWork) Nothing
                         , Expect.equal (events_ |> List.head) Nothing
                         ]
             ]
