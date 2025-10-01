@@ -44,7 +44,6 @@ interactionTestSuite =
                         maybeQueueId = Just (QueueID 1)
                         resource = createResource maybeQueueId [(QueueID 3), (QueueID 7)]
                         -- take work from queue and put it into the resource
-                        -- queue2Resource queue (resid, resource) eventtime = 
                         result = queue2Resource queue ((ResourceID 2), resource) (EventTime 7)
                         (queue_, resource_, events_) = case result of
                             InteractionResult q r e ->

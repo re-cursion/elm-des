@@ -14,7 +14,9 @@ type Behaviour
 
 type PutResult
     = Ok Queue
-    | Err Behaviour Queue 
+    | Err Behaviour Queue
+    | NoWork Queue
+
 
 
 putQueue : PutResult -> Queue
@@ -23,13 +25,10 @@ putQueue result =
         Ok queue ->
             queue
 
-        Err DropFirst queue ->
+        NoWork queue ->
             queue
 
-        Err DropLast queue ->
-            queue
-
-        Err Block queue ->
+        Err _ queue ->
             queue
 
 
@@ -38,6 +37,9 @@ putResult result =
     case result of
         Ok _ ->
             "Ok"
+
+        NoWork _ ->
+            "NoWork"
 
         Err DropFirst _ ->
             "FirstDropped"

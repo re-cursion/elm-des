@@ -1,35 +1,33 @@
 module Event exposing (..)
 
 import EventTime exposing (..)
-import Resource exposing (ResourceID)
+import Resource exposing (ResourceID, QueueID)
+import Queue exposing (..) 
+import Work exposing (..) 
+
 
 
 type EventType
-    = ServiceComplete
-    | FetchTask
-
-
-
+    = ServiceComplete ResourceID
+    | Q2R QueueID ResourceID
+    | R2Q ResourceID QueueID
+    | Drop QueueID WorkID
 --    | Interrupt
 
 
 type Event
-    = Event EventTime ResourceID EventType
+    = Event EventTime EventType
 
 
 eventTime : Event -> EventTime
-eventTime (Event time _ _) =
+eventTime (Event time _) =
     time
 
 
 eventType : Event -> EventType
-eventType (Event _ _ tp) =
+eventType (Event _ tp) =
     tp
 
-
-eventResourceID : Event -> ResourceID
-eventResourceID (Event _ nid _) =
-    nid
 
 
 compareEventTimes : Event -> Event -> Order
