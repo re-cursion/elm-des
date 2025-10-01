@@ -2,7 +2,12 @@ module Interactions exposing (..)
 
 import Resource exposing (Resource(..), QueueID, ResourceState(..), state, ResourceID(..), resourceWork)
 import Event exposing (Event(..))
+import Dict
+import Event exposing (Event(..), EventType(..))
 import EventTime exposing (EventTime(..), addTimes, eventTime2Int)
+import Html exposing (i)
+import Queue exposing (Behaviour, PutResult, Queue(..), put, take)
+import Resource exposing (QueueID, Resource(..), ResourceID(..), ResourceState(..), putWork2Resource, state)
 import Work exposing (Work(..))
 import Event exposing (Event(..), EventType(..))
 
@@ -20,14 +25,15 @@ type InteractionResult
 work2EventTime : Work -> ResourceID -> EventTime
 work2EventTime (Work _ times) (ResourceID resid) =
     let
-        match = Dict.get resid times
+        match =
+            Dict.get resid times
     in
     case match of
         Just m ->
             EventTime (eventTime2Int m)
+
         Nothing ->
             EventTime 0
-
 
 
 queue2Resource : Queue -> (ResourceID, Resource) -> EventTime -> InteractionResult
@@ -35,41 +41,28 @@ queue2Resource queue (resid, resource) eventtime =
     case (state resource) of
         Busy ->
             InteractionResult queue resource []
+
         Idle ->
             let
-                (maybework, queue_) = take queue
-                serviceCompleteTime = 
-                    case maybework of
-                        Just work ->
-                            addTimes eventtime (work2EventTime work resid)
-                        Nothing ->
-                            EventTime 0
-                serviceCompleteEvent = Event serviceCompleteTime (ServiceComplete resid)
+                ( maybework, queue_ ) =
+                    take queue
+
+                serviceCompleteTime =
+                    maybework
+                        |> Maybe.map
+                            (\work ->
+                                addTimes eventtime (work2EventTime work resid)
+                            )
             in
-            InteractionResult queue_ (putWork2Resource maybework resource) [serviceCompleteEvent]
+            case serviceCompleteTime of
+                Just svCmpltTime ->
+                    InteractionResult queue_ (putWork2Resource maybework resource) [ Event svCmpltTime resid ServiceComplete ]
+
+                Nothing ->
+                    InteractionResult queue resource []
 
 
 
-resource2Queue : (ResourceID, Resource) -> (QueueID, Queue) -> EventTime -> InteractionResult
-resource2Queue (resid, resource) (qid, queue) eventtime =
-    let
-        work = resourceWork resource 
-        pr = case work of
-            Just w ->
-                Queue.put w queue
-            Nothing ->
-                Queue.NoWork queue
-    in
-    case pr of
-        Queue.Ok q -> 
-            InteractionResult q (Resource.putWork2Resource Nothing resource) [Event eventtime (R2Q resid qid)] -- put nothing onto the resource, bc the work has been put onto the queue
-        Queue.Err DropFirst q ->
-            InteractionResult q (Resource.putWork2Resource Nothing resource) [Event eventtime (Drop qid (Maybe.withDefault (WorkID -1) work)), Event eventtime (R2Q resid qid)]
-        Queue.Err DropLast q ->
-            InteractionResult q resource []
-        Queue.Err Queue.Block q ->
-            InteractionResult q resource []
-        Queue.NoWork q ->
-            InteractionResult q resource []
-
-
+-- do nothing. Just return the same queue and resource which came in
+--resource2Queue : (ResourceID, Resource) -> Queue -> EventTime -> InteractionResult
+--resource2Queue (resid, resource) queue eventtime =

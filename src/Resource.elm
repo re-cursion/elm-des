@@ -60,19 +60,20 @@ output (Resource _ out _ _) =
 
 
 state : Resource -> ResourceState
-state  (Resource _ _ st _) =
+state (Resource _ _ st _) =
     st
 
 
-resourceWork : Resource -> Maybe Work
-resourceWork (Resource _ _ _ w) = 
+fetchWork : Resource -> Maybe Work
+fetchWork (Resource _ _ _ w) =
     w
 
 
-putWork2Resource : (Maybe Work) -> Resource -> Resource
-putWork2Resource maybework (Resource inp out st _) = 
+putWork2Resource : Maybe Work -> Resource -> Resource
+putWork2Resource maybework (Resource inp out st _) =
     case maybework of
         Just work ->
             Resource inp out Busy (Just work)
+
         Nothing ->
             Resource inp out st Nothing
