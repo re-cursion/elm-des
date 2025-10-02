@@ -1,6 +1,6 @@
 module Resource exposing (..)
 
-import Work exposing (Work)
+import Work exposing (Work(..))
 
 
 type QueueID
@@ -64,16 +64,16 @@ state (Resource _ _ st _) =
     st
 
 
-fetchWork : Resource -> Maybe Work
-fetchWork (Resource _ _ _ w) =
+work : Resource -> Maybe Work
+work (Resource _ _ _ w) =
     w
 
 
 putWork2Resource : Maybe Work -> Resource -> Resource
 putWork2Resource maybework (Resource inp out st _) =
     case maybework of
-        Just work ->
-            Resource inp out Busy (Just work)
+        Just wrk ->
+            Resource inp out Busy (Just wrk)
 
         Nothing ->
             Resource inp out st Nothing

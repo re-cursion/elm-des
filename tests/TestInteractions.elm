@@ -61,7 +61,7 @@ interactionTestSuite =
                     in
                     expectAll
                         [ Expect.equal (queue_ |> tasks |> List.length) 0
-                        , Expect.equal (resource_ |> fetchWork) (Just work)
+                        , Expect.equal (resource_ |> Resource.work) (Just work)
                         , Expect.equal (events_ |> List.head |> Maybe.andThen (\evt -> Just (eventTime evt))) (Just (EventTime 29))
                         ]
             , test "empty queue -> resource " <|
@@ -87,7 +87,7 @@ interactionTestSuite =
                     in
                     expectAll
                         [ Expect.equal (queue_ |> tasks |> List.length) 0
-                        , Expect.equal (resource_ |> fetchWork) Nothing
+                        , Expect.equal (resource_ |> Resource.work) Nothing
                         , Expect.equal (events_ |> List.head) Nothing
                         ]
             ]
