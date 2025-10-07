@@ -8,7 +8,7 @@ import EventTime exposing (EventTime(..), addTimes, eventTime2Int)
 import Html exposing (i)
 import Queue exposing (Behaviour, PutResult(..), Queue(..), put, take, putQueue, putResult)
 import Resource exposing (QueueID, Resource(..), ResourceID(..), ResourceState(..), putWork2Resource, state)
-import Work exposing (Work(..))
+import Work exposing (Work(..), WorkID(..), workIDValue, workID)
 import Event exposing (Event(..), EventType(..))
 
 import Queue exposing (Queue(..), put, take, PutResult(..), Behaviour(..))
@@ -64,8 +64,8 @@ queue2Resource eventtime queue (resid, resource) =
 
 
 
-justElse : (a -> b) -> b -> Maybe a -> b
-justElse fncAB dflt maybeA = 
+justOrElse : (a -> b) -> b -> Maybe a -> b
+justOrElse fncAB dflt maybeA = 
     case maybeA of
         Just val ->
             fncAB val
@@ -74,27 +74,37 @@ justElse fncAB dflt maybeA =
 
 
 
+
+
+
+
 resource2Queue : (ResourceID, Resource) -> (QueueID, Queue) -> EventTime -> InteractionResult
 resource2Queue (resid, resource) (qid, queue) eventtime =
     let
         work = Resource.work resource
-        pr = work |> justElse 
+        pr = work |> justOrElse 
                         (\w -> Queue.put w queue)
                         (NoWork queue)
     in
     case pr of
         Queue.NoWork q ->
             InteractionResult q resource []
-        Queue.Ok q ->
-            InteractionResult (putQueue pr) (putWork2Resource work resource) [Event eventtime (R2Q resid qid) ]
-        Queue.Err bhvr q ->
+        Queue.Ok q enqueuedWork ->
+            InteractionResult (putQueue pr) (putWork2Resource (Just enqueuedWork) resource) [Event eventtime (R2Q resid qid (enqueuedWork |> workID))]
+        Queue.Err bhvr q droppedOrBlockedWork ->
+            let
+                wid = case work of
+                        Just w ->
+                            w |> workID
+                        Nothing ->
+                            WorkID -1
+            in
             case bhvr of
                 Queue.Block ->
-                    InteractionResult q resource []
-                Queue.DropFirst ->
-                    InteractionResult q resource [Event Queue.Drop qid (work |> Maybe.withDefault )]
-                Queue.DropLast ->
-                    InteractionResult q resource []
+                    InteractionResult q resource [Event eventtime (Event.Block qid wid)]
+                _ -> -- DropFirst | DropLast
+                    InteractionResult q resource [Event eventtime (Event.R2Q resid qid wid) -- moved work
+                                                 ,Event eventtime (Event.Drop qid (workID droppedOrBlockedWork))] -- work dropped from queue
 
 
 

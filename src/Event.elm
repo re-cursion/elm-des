@@ -9,9 +9,10 @@ import Work exposing (..)
 
 type EventType
     = ServiceComplete ResourceID
-    | Q2R QueueID ResourceID
-    | R2Q ResourceID QueueID
+    | Q2R QueueID ResourceID WorkID
+    | R2Q ResourceID QueueID WorkID
     | Drop QueueID WorkID
+    | Block QueueID WorkID
 --    | Interrupt
 
 

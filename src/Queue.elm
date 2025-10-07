@@ -1,6 +1,7 @@
 module Queue exposing (Behaviour(..), PutResult(..), Queue(..), QueueConfig, config, put, putQueue, putResult, take, tasks)
 
-import Work exposing (Work)
+import Work exposing (Work(..), WorkID(..))
+import Dict
 
 
 type Behaviour
@@ -13,8 +14,8 @@ type Behaviour
 
 
 type PutResult
-    = Ok Queue
-    | Err Behaviour Queue
+    = Ok Queue Work
+    | Err Behaviour Queue Work
     | NoWork Queue
 
 
@@ -22,32 +23,32 @@ type PutResult
 putQueue : PutResult -> Queue
 putQueue result =
     case result of
-        Ok queue ->
+        Ok queue _ ->
             queue
 
         NoWork queue ->
             queue
 
-        Err _ queue ->
+        Err _ queue _ ->
             queue
 
 
 putResult : PutResult -> String
 putResult result =
     case result of
-        Ok _ ->
+        Ok _ _->
             "Ok"
 
         NoWork _ ->
             "NoWork"
 
-        Err DropFirst _ ->
+        Err DropFirst _ _ ->
             "FirstDropped"
 
-        Err DropLast _ ->
+        Err DropLast _ _ ->
             "LastDropped"
 
-        Err Block _ ->
+        Err Block _ _ ->
             "Blocked"
 
 
@@ -88,19 +89,34 @@ put work queue =
             List.length tsks
     in
     if count < max then
-        Ok (Queue cfg (List.append (tasks queue) [ work ]))
+        Ok (Queue cfg (List.append (tasks queue) [ work ])) work
         -- append new work at the end of the list of work (tasks)
 
     else
         case cfg.behaviour of
             Block ->
-                Err Block (Queue cfg (tasks queue))
+                Err Block (Queue cfg (tasks queue)) work
 
             DropFirst ->
-                Err DropFirst (Queue cfg ([ work ] |> List.append (tasks queue |> List.drop 1)))
+                let
+                    (droppedWork, remainingQueue) = case (tasks queue) of
+                        x :: xs ->
+                            (x, xs)
+                        [] ->
+                            (Work (WorkID -1) (Dict.fromList []), tasks queue) -- empty work
+                in
+                Err DropFirst (Queue cfg ([ work ] |> List.append remainingQueue)) droppedWork
 
             DropLast ->
-                Err DropLast (Queue cfg ([ work ] |> List.append (tasks queue |> List.take (max - 1))))
+                let
+                    (droppedWork, remainingQueue) = case (tasks queue |> List.reverse) of
+                        x :: xs ->
+                            (x, xs |> List.reverse)
+                        [] ->
+                            (Work (WorkID -1) (Dict.fromList []), tasks queue) -- empty work
+
+                in
+                Err DropLast (Queue cfg ([ work ] |> List.append remainingQueue)) droppedWork
 
 
 take : Queue -> ( Maybe Work, Queue )
