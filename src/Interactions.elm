@@ -20,6 +20,7 @@ import Dict
 
 type InteractionResult
     = InteractionResult Queue Resource (List Event)
+    | NoInteraction
 
 
 work2EventTime : Work -> ResourceID -> EventTime
@@ -40,7 +41,7 @@ queue2Resource : EventTime -> Queue -> (ResourceID, Resource) -> InteractionResu
 queue2Resource eventtime queue (resid, resource) = 
     case (state resource) of
         Busy ->
-            InteractionResult queue resource []
+            NoInteraction
 
         Idle ->
             let
@@ -59,13 +60,13 @@ queue2Resource eventtime queue (resid, resource) =
                     InteractionResult queue_ (putWork2Resource maybework resource) [ Event svCmpltTime (ServiceComplete resid) ]
 
                 Nothing ->
-                    InteractionResult queue resource []
+                    NoInteraction
 
 
 
 
-justOrElse : (a -> b) -> b -> Maybe a -> b
-justOrElse fncAB dflt maybeA = 
+justOrElse : b -> (a -> b) -> Maybe a -> b
+justOrElse dflt fncAB maybeA = 
     case maybeA of
         Just val ->
             fncAB val
@@ -76,35 +77,38 @@ justOrElse fncAB dflt maybeA =
 
 
 
-
-
-resource2Queue : (ResourceID, Resource) -> (QueueID, Queue) -> EventTime -> InteractionResult
-resource2Queue (resid, resource) (qid, queue) eventtime =
-    let
-        work = Resource.work resource
-        pr = work |> justOrElse 
-                        (\w -> Queue.put w queue)
-                        (NoWork queue)
+resourceWork2Queue_ : (ResourceID, Resource, Work) -> (QueueID, Queue) -> EventTime -> InteractionResult
+resourceWork2Queue_ (resid, resource, work) (qid, queue) eventtime =
+    let            
+        pr = Queue.put work queue -- move the work onto the queue
     in
     case pr of
-        Queue.NoWork q ->
-            InteractionResult q resource []
         Queue.Ok q enqueuedWork ->
-            InteractionResult (putQueue pr) (putWork2Resource (Just enqueuedWork) resource) [Event eventtime (R2Q resid qid (enqueuedWork |> workID))]
+            InteractionResult q (putWork2Resource Nothing resource) {-remove work from resource-} [Event eventtime (R2Q resid qid (enqueuedWork |> workID))]
         Queue.Err bhvr q droppedOrBlockedWork ->
             let
-                wid = case work of
-                        Just w ->
-                            w |> workID
-                        Nothing ->
-                            WorkID -1
+                wid = workID work
             in
             case bhvr of
                 Queue.Block ->
                     InteractionResult q resource [Event eventtime (Event.Block qid wid)]
                 _ -> -- DropFirst | DropLast
                     InteractionResult q resource [Event eventtime (Event.R2Q resid qid wid) -- moved work
-                                                 ,Event eventtime (Event.Drop qid (workID droppedOrBlockedWork))] -- work dropped from queue
+                                                ,Event eventtime (Event.Drop qid (workID droppedOrBlockedWork))] -- work dropped from queue
+
+
+
+
+resource2Queue : (ResourceID, Resource) -> (QueueID, Queue) -> EventTime -> InteractionResult
+resource2Queue (resid, resource) (qid, queue) eventtime =
+    let
+        work = Resource.work resource
+    in
+    case work of
+        Nothing ->
+            NoInteraction
+        Just justWork ->
+            resourceWork2Queue_ (resid, resource, justWork) (qid, queue) eventtime
 
 
 

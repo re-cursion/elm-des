@@ -58,6 +58,8 @@ interactionTestSuite =
                             case result of
                                 InteractionResult q r e ->
                                     ( q, r, e )
+                                NoInteraction ->
+                                    ( queue, resource, [])
                     in
                     expectAll
                         [ Expect.equal (queue_ |> tasks |> List.length) 0
@@ -84,6 +86,8 @@ interactionTestSuite =
                             case result of
                                 InteractionResult q r e ->
                                     ( q, r, e )
+                                NoInteraction ->
+                                    ( queue, resource, [])
                     in
                     expectAll
                         [ Expect.equal (queue_ |> tasks |> List.length) 0

@@ -16,7 +16,6 @@ type Behaviour
 type PutResult
     = Ok Queue Work
     | Err Behaviour Queue Work
-    | NoWork Queue
 
 
 
@@ -26,11 +25,9 @@ putQueue result =
         Ok queue _ ->
             queue
 
-        NoWork queue ->
-            queue
-
         Err _ queue _ ->
             queue
+
 
 
 putResult : PutResult -> String
@@ -38,9 +35,6 @@ putResult result =
     case result of
         Ok _ _->
             "Ok"
-
-        NoWork _ ->
-            "NoWork"
 
         Err DropFirst _ _ ->
             "FirstDropped"
