@@ -84,17 +84,17 @@ resourceWork2Queue_ (resid, resource, work) (qid, queue) eventtime =
     in
     case pr of
         Queue.Ok q enqueuedWork ->
-            InteractionResult q (putWork2Resource Nothing resource) {-remove work from resource-} [Event eventtime (R2Q resid qid (enqueuedWork |> workID))]
+            InteractionResult q (putWork2Resource Nothing resource) {-remove work from resource-} [Event eventtime (R2Q resid qid (enqueuedWork |> workID))] -- moved work event
         Queue.Err bhvr q droppedOrBlockedWork ->
             let
                 wid = workID work
             in
             case bhvr of
                 Queue.Block ->
-                    InteractionResult q resource [Event eventtime (Event.Block qid wid)]
+                    InteractionResult q resource [Event eventtime (Event.Block qid wid)] -- blocked movement of work event
                 _ -> -- DropFirst | DropLast
-                    InteractionResult q resource [Event eventtime (Event.R2Q resid qid wid) -- moved work
-                                                ,Event eventtime (Event.Drop qid (workID droppedOrBlockedWork))] -- work dropped from queue
+                    InteractionResult q resource [Event eventtime (Event.R2Q resid qid wid) -- moved work event
+                                                 ,Event eventtime (Event.Drop qid (workID droppedOrBlockedWork))] -- work dropped from queue event
 
 
 
@@ -106,7 +106,7 @@ resource2Queue (resid, resource) (qid, queue) eventtime =
     in
     case work of
         Nothing ->
-            NoInteraction
+            NoInteraction -- no work means no interaction
         Just justWork ->
             resourceWork2Queue_ (resid, resource, justWork) (qid, queue) eventtime
 
