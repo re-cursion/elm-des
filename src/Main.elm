@@ -4,7 +4,7 @@ module Main exposing (..)
 
 import Browser
 import Dict exposing (Dict)
-import EventTime exposing (EventTime(..))
+import EventTime exposing (..)
 import Html exposing (Html, button, div, li, ul)
 import Html.Events exposing (onClick)
 import Queue exposing (..)
@@ -62,20 +62,20 @@ processNextStep model =
             Dict.filter (\_ resource -> (Resource.input resource) /= Nothing && (Resource.state resource == Idle)) model.resources
 
         updatedEvents =
-            model.events ++ (idleResources |> Dict.keys |> List.map (\id -> Event model.currentTime (ResourceID id) FetchTask))
+            model.events ++ (idleResources |> Dict.keys |> List.map (\id -> Event model.currentTime (FetchTask (ResourceID id))))
 
         -- sort events by time
         sortedEvents =
             List.sortWith compareEventTimes updatedEvents
 
         ( currentEvents, laterEvents ) =
-            List.partition (\e -> (e |> eventTime |> fetchTime) <= (model.currentTime |> fetchTime)) sortedEvents
+            List.partition (\e -> (e |> eventTime |> eventTime2Int) <= (model.currentTime |> eventTime2Int)) sortedEvents
 
         stepPlusOneModel =
             executeOnCurrentEvents model currentEvents laterEvents
     in
     { stepPlusOneModel
-        | currentTime = Time ((stepPlusOneModel.currentTime |> fetchTime) + 1)
+        | currentTime = EventTime ((stepPlusOneModel.currentTime |> eventTime2Int) + 1)
         , events = stepPlusOneModel.events
     }
 
@@ -86,7 +86,7 @@ executeOnCurrentEvents : Model -> List Event -> List Event -> Model
 executeOnCurrentEvents model currentEvents laterEvents =
     let
         serviceCompleteEvents =
-            List.filter isServiceCompleteEvent currentEvents
+            List.filter (\e -> (eventType e) == (ServiceComplete _)) currentEvents
 
         fetchTaskEvents =
             List.filter isFetchTaskEvent currentEvents

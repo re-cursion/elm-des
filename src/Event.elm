@@ -8,7 +8,8 @@ import Work exposing (..)
 
 
 type EventType
-    = ServiceComplete ResourceID
+    = FetchTask ResourceID
+    | ServiceComplete ResourceID
     | Q2R QueueID ResourceID WorkID
     | R2Q ResourceID QueueID WorkID
     | Drop QueueID WorkID
@@ -29,6 +30,10 @@ eventType : Event -> EventType
 eventType (Event _ tp) =
     tp
 
+isEventType : Event -> Bool
+isEventType (Event _ tp) =
+    case tp of
+        (EventType type) -> type
 
 
 compareEventTimes : Event -> Event -> Order
