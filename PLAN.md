@@ -764,21 +764,27 @@ Tests use `elm-explorations/test` with `fuzz` tests for priority ordering and
 queue invariants (the queue always stays ≤ capacity; discipline order is
 maintained after every put).
 
-### Phase 1 — Solid Core (now)
+### Phase 1 — Solid Core ✅ done (commit e90cbb3)
 
 Goal: a working, correctly simulating engine with a plain-text / table UI.
 
-- [ ] `Id.elm` — shared ID types (JobID, NodeID, QueueID, LockID)
-- [ ] `Job.elm` — Job, Priority, comparePriority
-- [ ] `Queue.elm` — rewrite with Discipline, Overflow, EnqueueResult
-- [ ] `Node.elm` — NodeKind, NodeState, WorkerActivity
-- [ ] `Lock.elm` — Lock, LockState
-- [ ] `Event.elm` — full EventType union per plan
-- [ ] `Topology.elm` — nodeInput, nodeOutputs, queueOutputs
-- [ ] `SimState.elm` — SimState with seed, eventQueue, eventLog
-- [ ] `Engine.elm` — processNextEvent, advanceUntil; Source, Worker, Sink handlers
-- [ ] `Main.elm` — Browser.element, Step/Play controls, event log view
-- [ ] Tests for Queue, Job, Engine (end-to-end Source→Worker→Sink)
+- [x] `Id.elm` — shared ID types (JobID, NodeID, QueueID, LockID)
+- [x] `Job.elm` — Job, Priority, comparePriority
+- [x] `Queue.elm` — rewrite with Discipline, Overflow, EnqueueResult
+- [x] `Node.elm` — NodeKind, NodeState, WorkerActivity
+- [x] `Lock.elm` — Lock, LockState
+- [x] `Event.elm` — full EventType union per plan
+- [x] `Topology.elm` — nodeInput, nodeOutputs, queueOutputs
+- [x] `SimState.elm` — SimState with seed, eventQueue, eventLog, job store
+- [x] `Engine.elm` — processNextEvent, advanceUntil, drainAll; Source, Worker, Sink handlers
+- [x] `Main.elm` — Browser.element, Step / Run-to-end / Reset controls, event log view
+- [x] 31 tests passing: TestQueue, TestJob, TestEngine (end-to-end Source→Worker→Sink)
+
+**What Phase 1 does not yet include** (deferred to later phases):
+- Playback speed slider / `Time.every` animation loop (Phase 2+)
+- Dispatcher and Boss nodes (Phase 2)
+- JSON scenario loading (Phase 3)
+- SVG visualisation and themed job shapes (Phase 3/4)
 
 ### Phase 2 — Dispatcher and Boss Nodes
 
