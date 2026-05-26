@@ -747,18 +747,38 @@ maps neatly onto Elm's `Html.map` / `Cmd.map` component pattern.
 
 ## Implementation Phases
 
+### Testing Policy
+
+Every module ships with a corresponding test file. Tests are the executable
+specification — if it isn't tested it isn't defined.
+
+| Module | What to test |
+|---|---|
+| `Queue` | enqueue/dequeue for all overflow behaviours and disciplines; boundary at capacity=1 and capacity=max |
+| `Job` | priority ordering; `comparePriority` totality |
+| `Engine` | single-step transitions for each event type; Source→Worker→Sink end-to-end; blocking and unblocking; sign-off flow |
+| `Topology` | valid and invalid graphs (disconnected node, missing input queue) |
+| `Lock` | capacity=1 and capacity=N; waiter queue ordering |
+
+Tests use `elm-explorations/test` with `fuzz` tests for priority ordering and
+queue invariants (the queue always stays ≤ capacity; discipline order is
+maintained after every put).
+
 ### Phase 1 — Solid Core (now)
 
 Goal: a working, correctly simulating engine with a plain-text / table UI.
 
-- [ ] Redefine `Topology` and `SimState` as above (clean break from current
-      approach)
-- [ ] Implement `processNextEvent` with time-jump semantics
-- [ ] Node handlers: Source, Worker, Sink
-- [ ] Queue operations: enqueue (with all three overflow behaviours), dequeue
-- [ ] Event log viewer: scrollable list of timestamped events
-- [ ] "Step" and "Run to completion" controls
-- [ ] Basic metrics sidebar: throughput, mean queue length, mean cycle time
+- [ ] `Id.elm` — shared ID types (JobID, NodeID, QueueID, LockID)
+- [ ] `Job.elm` — Job, Priority, comparePriority
+- [ ] `Queue.elm` — rewrite with Discipline, Overflow, EnqueueResult
+- [ ] `Node.elm` — NodeKind, NodeState, WorkerActivity
+- [ ] `Lock.elm` — Lock, LockState
+- [ ] `Event.elm` — full EventType union per plan
+- [ ] `Topology.elm` — nodeInput, nodeOutputs, queueOutputs
+- [ ] `SimState.elm` — SimState with seed, eventQueue, eventLog
+- [ ] `Engine.elm` — processNextEvent, advanceUntil; Source, Worker, Sink handlers
+- [ ] `Main.elm` — Browser.element, Step/Play controls, event log view
+- [ ] Tests for Queue, Job, Engine (end-to-end Source→Worker→Sink)
 
 ### Phase 2 — Dispatcher and Boss Nodes
 

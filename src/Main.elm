@@ -1,167 +1,296 @@
-module Main exposing (..)
-
--- import ResourceView exposing (drawArrowWithQueue, drawResource)
+module Main exposing (main)
 
 import Browser
-import Dict exposing (Dict)
-import EventTime exposing (..)
-import Html exposing (Html, button, div, li, ul)
+import Dict
+import Engine
+import Event exposing (EventType(..))
+import EventTime exposing (EventTime(..), eventTime2Int)
+import Html exposing (Html, button, div, h2, li, p, span, text, ul)
+import Html.Attributes exposing (style)
 import Html.Events exposing (onClick)
-import Queue exposing (..)
-import Resource exposing (..)
-import Svg exposing (svg)
-import Svg.Attributes exposing (..)
-import Types exposing (..)
-import Work exposing (Work(..), WorkID(..))
-import Interactions exposing (..)
-import Event exposing (..)
+import Id exposing (NodeID(..), QueueID(..))
+import Job exposing (Priority(..))
+import Node exposing (NodeKind(..), NodeState(..), makeSource, makeSink, makeWorker)
+import Queue
+import Random
+import SimState exposing (SimState)
+import Topology exposing (Topology)
 
 
-init =
-    { resources =
-        Dict.fromList
-            [ ( 1, Resource (Just (QueueID 3)) [ QueueID 1 ] Idle Nothing )
-            , ( 2, Resource (Just (QueueID 1)) [ QueueID 2 ] Idle Nothing )
-            , ( 3, Resource (Just (QueueID 2)) [ QueueID 3 ] Idle Nothing )
-            ]
-    , queues =
-        Dict.fromList
-            [ ( 1
-              , { tasks =
-                    [ Work (WorkID 1) (Dict.fromList [ ( 1, EventTime 5 ) ])
-                    , Work (WorkID 2) (Dict.fromList [ ( 2, EventTime 5 ) ])
-                    , Work (WorkID 3) (Dict.fromList [ ( 3, EventTime 5 ) ])
-                    ]
-                }
-              )
-            , ( 2, { tasks = [] } )
-            , ( 3, { tasks = [] } )
-            ]
-    , events =
-        []
-    , currentTime = EventTime 0
+-- ── Scenario wiring ───────────────────────────────────────────────────────────
+-- Simple 3-node chain: Source → [Queue 1] → Worker → [Queue 2] → Sink
+
+scenario : ( Topology, SimState )
+scenario =
+    let
+        topo =
+            Topology.empty
+                |> Topology.addOutputEdge { from = NodeID 1, to = QueueID 1 }
+                |> Topology.addInputEdge  { from = QueueID 1, to = NodeID 2 }
+                |> Topology.addOutputEdge { from = NodeID 2, to = QueueID 2 }
+                |> Topology.addInputEdge  { from = QueueID 2, to = NodeID 3 }
+
+        sourceCfg =
+            { arrivalRate = 0.3, jobPriority = Normal, jobLabel = "Job" }
+
+        workerCfg =
+            { serviceRate = 0.5, preemptive = False, signoff = Nothing }
+
+        q1 =
+            Queue.empty { capacity = 5, discipline = Queue.FIFO, overflow = Queue.Block }
+
+        q2 =
+            Queue.empty { capacity = 5, discipline = Queue.FIFO, overflow = Queue.Block }
+
+        seed =
+            Random.initialSeed 42
+
+        ( firstJobID, state0 ) =
+            SimState.nextJobID (SimState.init seed)
+
+        state1 =
+            state0
+                |> SimState.putNode (NodeID 1) (makeSource "Source" sourceCfg)
+                |> SimState.putNode (NodeID 2) (makeWorker "Worker" workerCfg)
+                |> SimState.putNode (NodeID 3) (makeSink "Sink")
+                |> SimState.putQueue (QueueID 1) q1
+                |> SimState.putQueue (QueueID 2) q2
+                -- kick off first arrival
+                |> SimState.scheduleEvent
+                    (Event.event (EventTime 0) (JobArrived (NodeID 1) firstJobID))
+    in
+    ( topo, state1 )
+
+
+-- ── Model ─────────────────────────────────────────────────────────────────────
+
+type alias Model =
+    { topo     : Topology
+    , simState : SimState
+    , paused   : Bool
     }
 
+
+init : () -> ( Model, Cmd Msg )
+init _ =
+    let
+        ( topo, simState ) =
+            scenario
+    in
+    ( { topo = topo, simState = simState, paused = True }, Cmd.none )
+
+
+-- ── Update ────────────────────────────────────────────────────────────────────
 
 type Msg
-    = StepSimulation
+    = Step
+    | RunToEnd
+    | Reset
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        StepSimulation ->
-            processNextStep model
+        Step ->
+            ( { model | simState = Engine.processNextEvent model.topo model.simState }
+            , Cmd.none
+            )
+
+        RunToEnd ->
+            ( { model | simState = Engine.drainAll model.topo model.simState }
+            , Cmd.none
+            )
+
+        Reset ->
+            let
+                ( topo, simState ) =
+                    scenario
+            in
+            ( { model | topo = topo, simState = simState }, Cmd.none )
 
 
-processNextStep : Model -> Model
-processNextStep model =
-    -- handle all resources: service idle resources. Create new events for all idle resources to check the queues
-    let
-        idleResources =
-            Dict.filter (\_ resource -> (Resource.input resource) /= Nothing && (Resource.state resource == Idle)) model.resources
-
-        updatedEvents =
-            model.events ++ (idleResources |> Dict.keys |> List.map (\id -> Event model.currentTime (FetchTask (ResourceID id))))
-
-        -- sort events by time
-        sortedEvents =
-            List.sortWith compareEventTimes updatedEvents
-
-        ( currentEvents, laterEvents ) =
-            List.partition (\e -> (e |> eventTime |> eventTime2Int) <= (model.currentTime |> eventTime2Int)) sortedEvents
-
-        stepPlusOneModel =
-            executeOnCurrentEvents model currentEvents laterEvents
-    in
-    { stepPlusOneModel
-        | currentTime = EventTime ((stepPlusOneModel.currentTime |> eventTime2Int) + 1)
-        , events = stepPlusOneModel.events
-    }
-
-
-
-
-executeOnCurrentEvents : Model -> List Event -> List Event -> Model
-executeOnCurrentEvents model currentEvents laterEvents =
-    let
-        serviceCompleteEvents =
-            List.filter (\e -> (eventType e) == (ServiceComplete _)) currentEvents
-
-        fetchTaskEvents =
-            List.filter isFetchTaskEvent currentEvents
-
-        ( changedResources, changedQueues, newEvents ) =
-            ( model.resources, model.queues )
-                |> pushTaskToQueue serviceCompleteEvents
-                |> fetchTaskFromQueue model.currentTime fetchTaskEvents
-
-        nextModelEvents =
-            laterEvents ++ newEvents
-    in
-    { model | resources = changedResources, queues = changedQueues, events = nextModelEvents }
-
+-- ── View ──────────────────────────────────────────────────────────────────────
 
 view : Model -> Html Msg
 view model =
-    div []
-        [ Html.text "Minimal Resource Simulation"
-        , svgView model
-        , button [ onClick StepSimulation ] [ Html.text "Step Simulation" ]
-        , Html.text ("Current time: " ++ String.fromInt (model.currentTime |> fetchTime))
-        , Html.text "\nQueues:"
-        , ul [] (List.map (\q -> li [] [ Html.text ("Queue " ++ String.fromInt (fetchQueueID q.id) ++ ": " ++ String.join ", " (List.map (\t -> String.fromInt (fetchWorkID t.id)) q.tasks)) ]) model.queues)
-        , Html.text "\nEvents:"
-        , ul [] (List.map (\e -> li [] [ Html.text (eventToString e) ]) (List.sortWith compareEventTimes model.events))
+    div [ style "font-family" "monospace", style "padding" "1rem" ]
+        [ h2 [] [ text "elm-des — Discrete Event Simulation" ]
+        , viewControls
+        , viewClock model.simState
+        , viewQueues model.simState
+        , viewNodes model.simState
+        , viewEventLog model.simState
         ]
 
 
-eventToString : Event -> String
-eventToString e =
+viewControls : Html Msg
+viewControls =
+    div [ style "margin-bottom" "1rem" ]
+        [ btn Step    "Step"
+        , btn RunToEnd "Run to end"
+        , btn Reset   "Reset"
+        ]
+
+
+btn : Msg -> String -> Html Msg
+btn msg label =
+    button
+        [ onClick msg
+        , style "margin-right" "0.5rem"
+        , style "padding" "0.25rem 0.75rem"
+        ]
+        [ text label ]
+
+
+viewClock : SimState -> Html msg
+viewClock state =
+    p [] [ text ("Clock: " ++ String.fromInt (eventTime2Int state.clock)) ]
+
+
+viewQueues : SimState -> Html msg
+viewQueues state =
+    div []
+        [ h2 [] [ text "Queues" ]
+        , ul [] (Dict.toList state.queues |> List.map viewQueue)
+        ]
+
+
+viewQueue : ( Int, Queue.Queue ) -> Html msg
+viewQueue ( qid, queue ) =
     let
-        nid =
-            e |> eventResourceID |> fetchResourceID |> String.fromInt
+        jobs =
+            Queue.toList queue
 
-        time =
-            e |> eventTime |> fetchTime |> String.fromInt
-
-        etype =
-            case e |> eventType of
-                ServiceComplete ->
-                    "ServiceComplete at resource " ++ nid
-
-                FetchTask ->
-                    "FetchTask at resource " ++ nid
+        jobLabels =
+            if List.isEmpty jobs then
+                "(empty)"
+            else
+                jobs
+                    |> List.map (\j -> j.label ++ "#" ++ String.fromInt (Id.jobIDInt j.id))
+                    |> String.join ", "
     in
-    time ++ ": " ++ etype
+    li []
+        [ text
+            ("Q"
+                ++ String.fromInt qid
+                ++ " ["
+                ++ String.fromInt (Queue.size queue)
+                ++ "]: "
+                ++ jobLabels
+            )
+        ]
 
 
-svgView : Model -> Html msg
-svgView model =
+viewNodes : SimState -> Html msg
+viewNodes state =
+    div []
+        [ h2 [] [ text "Nodes" ]
+        , ul [] (Dict.toList state.nodes |> List.map viewNode)
+        ]
+
+
+viewNode : ( Int, Node.NodeData ) -> Html msg
+viewNode ( nid, node ) =
     let
-        queueArrows =
-            List.concatMap
-                (\q ->
-                    let
-                        fromResources =
-                            List.filter (\n -> List.member q.id n.outputQueues) model.resources
+        stateStr =
+            case node.state of
+                Idle ->
+                    "idle"
 
-                        toResource =
-                            List.filter (\n -> n.inputQueue == Just q.id) model.resources |> List.head
-                    in
-                    case ( fromResources, toResource ) of
-                        ( fromN :: _, Just toN ) ->
-                            [ drawArrowWithQueue fromN toN q ]
+                Busy jid (EventTime t) ->
+                    "busy (job #"
+                        ++ String.fromInt (Id.jobIDInt jid)
+                        ++ ", done @"
+                        ++ String.fromInt t
+                        ++ ")"
 
-                        _ ->
-                            []
-                )
-                model.queues
+                Blocked jid ->
+                    "blocked (job #" ++ String.fromInt (Id.jobIDInt jid) ++ ")"
+
+                Signoff jid _ ->
+                    "awaiting signoff (job #" ++ String.fromInt (Id.jobIDInt jid) ++ ")"
+
+                Preempted jid _ ->
+                    "preempted (job #" ++ String.fromInt (Id.jobIDInt jid) ++ ")"
+
+                Paused _ ->
+                    "paused"
     in
-    svg [ width "600", height "500", Svg.Attributes.style "border:1px solid #ccc; background:#fafafa;" ]
-        (queueArrows ++ List.map drawResource model.resources)
+    li [] [ text (node.label ++ " (N" ++ String.fromInt nid ++ "): " ++ stateStr) ]
 
+
+viewEventLog : SimState -> Html msg
+viewEventLog state =
+    div []
+        [ h2 [] [ text "Event log (newest first)" ]
+        , ul
+            [ style "max-height" "300px"
+            , style "overflow-y" "auto"
+            , style "border" "1px solid #ccc"
+            , style "padding" "0.5rem"
+            ]
+            (state.eventLog |> List.map viewEvent)
+        , h2 [] [ text "Pending events" ]
+        , ul [] (state.eventQueue |> List.map viewEvent)
+        ]
+
+
+viewEvent : Event.Event -> Html msg
+viewEvent evt =
+    li []
+        [ span [ style "color" "#888" ]
+            [ text ("t=" ++ String.fromInt (eventTime2Int evt.time) ++ " ") ]
+        , text (describeEvent evt.kind)
+        ]
+
+
+describeEvent : EventType -> String
+describeEvent kind =
+    case kind of
+        JobArrived (NodeID nid) jid ->
+            "JobArrived  node=" ++ String.fromInt nid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        ServiceStarted (NodeID nid) jid ->
+            "ServiceStarted  node=" ++ String.fromInt nid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        ServiceComplete (NodeID nid) jid ->
+            "ServiceComplete  node=" ++ String.fromInt nid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        JobEnqueued (QueueID qid) jid ->
+            "JobEnqueued  queue=" ++ String.fromInt qid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        JobDequeued (QueueID qid) (NodeID nid) jid ->
+            "JobDequeued  queue=" ++ String.fromInt qid ++ " → node=" ++ String.fromInt nid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        JobBlocked (QueueID qid) jid ->
+            "JobBlocked  queue=" ++ String.fromInt qid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        JobDropped (QueueID qid) jid ->
+            "JobDropped  queue=" ++ String.fromInt qid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        SignoffRequested (NodeID nid) _ jid ->
+            "SignoffRequested  node=" ++ String.fromInt nid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        SignoffStarted (NodeID nid) _ jid ->
+            "SignoffStarted  node=" ++ String.fromInt nid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        SignoffComplete (NodeID nid) _ jid ->
+            "SignoffComplete  node=" ++ String.fromInt nid ++ " job=#" ++ String.fromInt (Id.jobIDInt jid)
+
+        MeetingStarted ->
+            "MeetingStarted"
+
+        MeetingEnded ->
+            "MeetingEnded"
+
+
+-- ── Entry point ───────────────────────────────────────────────────────────────
 
 main : Program () Model Msg
 main =
-    Browser.sandbox { init = init, update = update, view = view }
+    Browser.element
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = \_ -> Sub.none
+        }

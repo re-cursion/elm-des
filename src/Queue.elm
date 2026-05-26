@@ -1,118 +1,196 @@
-module Queue exposing (Behaviour(..), PutResult(..), Queue(..), QueueConfig, config, put, putQueue, putResult, take, tasks)
+module Queue exposing
+    ( Discipline(..)
+    , Overflow(..)
+    , Queue
+    , EnqueueResult(..)
+    , empty
+    , enqueue
+    , dequeue
+    , peek
+    , size
+    , isEmpty
+    , toList
+    )
 
-import Work exposing (Work(..), WorkID(..))
-import Dict
+import Id exposing (JobID)
+import Job exposing (Job, priorityRank)
 
 
-type Behaviour
-    = DropFirst
+type Discipline
+    = FIFO
+    | PriorityFIFO
+    | LIFO
+
+
+type Overflow
+    = Block
+    | DropFirst
     | DropLast
-    | Block
-
-
-
-
-
-type PutResult
-    = Ok Queue Work
-    | Err Behaviour Queue Work
-
-
-
-putQueue : PutResult -> Queue
-putQueue result =
-    case result of
-        Ok queue _ ->
-            queue
-
-        Err _ queue _ ->
-            queue
-
-
-
-putResult : PutResult -> String
-putResult result =
-    case result of
-        Ok _ _->
-            "Ok"
-
-        Err DropFirst _ _ ->
-            "FirstDropped"
-
-        Err DropLast _ _ ->
-            "LastDropped"
-
-        Err Block _ _ ->
-            "Blocked"
+    | DropLowestPriority
 
 
 type alias QueueConfig =
-    { size : Int, behaviour : Behaviour }
+    { capacity   : Int
+    , discipline : Discipline
+    , overflow   : Overflow
+    }
 
 
 type Queue
-    = Queue QueueConfig (List Work)
+    = Queue QueueConfig (List Job)
 
 
-tasks : Queue -> List Work
-tasks (Queue _ lw) =
-    lw
+type EnqueueResult
+    = Enqueued Queue
+    | WasBlocked
+    | DroppedExisting JobID Queue
+    | DroppedIncoming
 
 
-    
+empty : QueueConfig -> Queue
+empty cfg =
+    Queue cfg []
 
 
-config : Queue -> QueueConfig
-config (Queue cfg _) =
-    cfg
+size : Queue -> Int
+size (Queue _ jobs) =
+    List.length jobs
 
 
-put : Work -> Queue -> PutResult
-put work queue =
-    let
-        cfg =
-            config queue
+isEmpty : Queue -> Bool
+isEmpty q =
+    size q == 0
 
-        max =
-            cfg.size
 
-        tsks =
-            tasks queue
+peek : Queue -> Maybe Job
+peek (Queue _ jobs) =
+    List.head jobs
 
-        count =
-            List.length tsks
-    in
-    if count < max then
-        Ok (Queue cfg (List.append (tasks queue) [ work ])) work
-        -- append new work at the end of the list of work (tasks)
+
+toList : Queue -> List Job
+toList (Queue _ jobs) =
+    jobs
+
+
+enqueue : Job -> Queue -> EnqueueResult
+enqueue job (Queue cfg jobs) =
+    if List.length jobs < cfg.capacity then
+        Enqueued (Queue cfg (insert cfg.discipline job jobs))
 
     else
-        case cfg.behaviour of
+        case cfg.overflow of
             Block ->
-                Err Block (Queue cfg (tasks queue)) work
+                WasBlocked
 
             DropFirst ->
-                let
-                    (droppedWork, remainingQueue) = case (tasks queue) of
-                        x :: xs ->
-                            (x, xs)
-                        [] ->
-                            (Work (WorkID -1) (Dict.fromList []), tasks queue) -- empty work
-                in
-                Err DropFirst (Queue cfg ([ work ] |> List.append remainingQueue)) droppedWork
+                case jobs of
+                    [] ->
+                        Enqueued (Queue cfg [ job ])
+
+                    dropped :: rest ->
+                        DroppedExisting dropped.id
+                            (Queue cfg (insert cfg.discipline job rest))
 
             DropLast ->
                 let
-                    (droppedWork, remainingQueue) = case (tasks queue |> List.reverse) of
-                        x :: xs ->
-                            (x, xs |> List.reverse)
-                        [] ->
-                            (Work (WorkID -1) (Dict.fromList []), tasks queue) -- empty work
-
+                    reversed =
+                        List.reverse jobs
                 in
-                Err DropLast (Queue cfg ([ work ] |> List.append remainingQueue)) droppedWork
+                case reversed of
+                    [] ->
+                        Enqueued (Queue cfg [ job ])
+
+                    dropped :: rest ->
+                        DroppedExisting dropped.id
+                            (Queue cfg (insert cfg.discipline job (List.reverse rest)))
+
+            DropLowestPriority ->
+                dropLowestPriority job cfg jobs
 
 
-take : Queue -> ( Maybe Work, Queue )
-take queue =
-    ( List.head (tasks queue), Queue (config queue) (Maybe.withDefault [] (List.tail (tasks queue))) )
+dropLowestPriority : Job -> QueueConfig -> List Job -> EnqueueResult
+dropLowestPriority incoming cfg jobs =
+    let
+        lowestInQueue =
+            List.foldl
+                (\j acc ->
+                    case acc of
+                        Nothing ->
+                            Just j
+
+                        Just current ->
+                            if priorityRank j.priority < priorityRank current.priority then
+                                Just j
+                            else
+                                acc
+                )
+                Nothing
+                jobs
+    in
+    case lowestInQueue of
+        Nothing ->
+            Enqueued (Queue cfg [ incoming ])
+
+        Just lowest ->
+            if priorityRank incoming.priority > priorityRank lowest.priority then
+                let
+                    withoutLowest =
+                        removeFirst (\j -> j.id == lowest.id) jobs
+                in
+                DroppedExisting lowest.id
+                    (Queue cfg (insert cfg.discipline incoming withoutLowest))
+
+            else
+                DroppedIncoming
+
+
+dequeue : Queue -> Maybe ( Job, Queue )
+dequeue (Queue cfg jobs) =
+    case jobs of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            Just ( first, Queue cfg rest )
+
+
+insert : Discipline -> Job -> List Job -> List Job
+insert discipline job jobs =
+    case discipline of
+        FIFO ->
+            jobs ++ [ job ]
+
+        PriorityFIFO ->
+            insertByPriority job jobs
+
+        LIFO ->
+            job :: jobs
+
+
+insertByPriority : Job -> List Job -> List Job
+insertByPriority job jobs =
+    case jobs of
+        [] ->
+            [ job ]
+
+        first :: rest ->
+            -- higher priority goes earlier; ties preserve arrival order (FIFO among equals)
+            if priorityRank job.priority > priorityRank first.priority then
+                job :: first :: rest
+
+            else
+                first :: insertByPriority job rest
+
+
+removeFirst : (a -> Bool) -> List a -> List a
+removeFirst pred xs =
+    case xs of
+        [] ->
+            []
+
+        x :: rest ->
+            if pred x then
+                rest
+
+            else
+                x :: removeFirst pred rest

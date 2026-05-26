@@ -1,41 +1,52 @@
-module Event exposing (..)
+module Event exposing
+    ( Event
+    , EventType(..)
+    , event
+    , eventTime
+    , eventType
+    , compareByTime
+    )
 
-import EventTime exposing (..)
-import Resource exposing (ResourceID, QueueID)
-import Queue exposing (..) 
-import Work exposing (..) 
-
+import EventTime exposing (EventTime, compareTimes)
+import Id exposing (JobID, LockID, NodeID, QueueID)
 
 
 type EventType
-    = FetchTask ResourceID
-    | ServiceComplete ResourceID
-    | Q2R QueueID ResourceID WorkID
-    | R2Q ResourceID QueueID WorkID
-    | Drop QueueID WorkID
-    | Block QueueID WorkID
---    | Interrupt
+    = JobArrived       NodeID JobID
+    | ServiceStarted   NodeID JobID
+    | ServiceComplete  NodeID JobID
+    | JobEnqueued      QueueID JobID
+    | JobDequeued      QueueID NodeID JobID
+    | JobBlocked       QueueID JobID
+    | JobDropped       QueueID JobID
+    | SignoffRequested NodeID LockID JobID
+    | SignoffStarted   NodeID LockID JobID
+    | SignoffComplete  NodeID LockID JobID
+    | MeetingStarted
+    | MeetingEnded
 
 
-type Event
-    = Event EventTime EventType
+type alias Event =
+    { time : EventTime
+    , kind : EventType
+    }
+
+
+event : EventTime -> EventType -> Event
+event t k =
+    { time = t, kind = k }
 
 
 eventTime : Event -> EventTime
-eventTime (Event time _) =
-    time
+eventTime e =
+    e.time
 
 
 eventType : Event -> EventType
-eventType (Event _ tp) =
-    tp
-
-isEventType : Event -> Bool
-isEventType (Event _ tp) =
-    case tp of
-        (EventType type) -> type
+eventType e =
+    e.kind
 
 
-compareEventTimes : Event -> Event -> Order
-compareEventTimes evt0 evt1 =
-    compareTimes (evt0 |> eventTime) (evt1 |> eventTime)
+compareByTime : Event -> Event -> Order
+compareByTime a b =
+    compareTimes a.time b.time
