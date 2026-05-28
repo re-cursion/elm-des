@@ -776,6 +776,7 @@ viewHistory model =
         _ ->
             let
                 tl = Metrics.computeTimelines model.simState
+                m  = Metrics.compute model.simState
             in
             if tl.totalTicks == 0 then
                 text ""
@@ -788,6 +789,8 @@ viewHistory model =
                     , queueChart 1 model.simState tl
                     , sparkLabel "Q2 length"
                     , queueChart 2 model.simState tl
+                    , sparkLabel "Cycle time distribution  (p50 = green  p95 = orange)"
+                    , cycleHistogram m
                     ]
 
 
@@ -915,6 +918,98 @@ stepPolyline w h totalTicks cap steps =
     allPts
         |> List.map (\( x, y ) -> String.fromFloat x ++ "," ++ String.fromFloat y)
         |> String.join " "
+
+
+cycleHistogram : Metrics.SystemMetrics -> Html msg
+cycleHistogram m =
+    if List.isEmpty m.cycleTimes then
+        p [ style "color" "#aaa", style "font-size" "0.8em" ] [ text "No completed jobs yet." ]
+
+    else
+        let
+            cts    = m.cycleTimes
+            minCT  = List.minimum cts |> Maybe.withDefault 0
+            maxCT  = List.maximum cts |> Maybe.withDefault 1
+            range  = max 1 (maxCT - minCT)
+            nBins  = min 30 (List.length cts) |> max 1
+            binW   = max 1 (ceiling (toFloat range / toFloat nBins))
+            nBins2 = ceiling (toFloat range / toFloat binW) + 1
+
+            bins =
+                List.foldl
+                    (\ct acc ->
+                        let
+                            i = min (nBins2 - 1) ((ct - minCT) // binW)
+                        in
+                        Dict.update i (Just << (+) 1 << Maybe.withDefault 0) acc
+                    )
+                    Dict.empty
+                    cts
+
+            maxCount = Dict.values bins |> List.maximum |> Maybe.withDefault 1
+
+            svgW = 760.0
+            svgH = 80.0
+            bw   = svgW / toFloat nBins2
+
+            bars =
+                List.range 0 (nBins2 - 1)
+                    |> List.map
+                        (\i ->
+                            let
+                                count = Dict.get i bins |> Maybe.withDefault 0
+                                bh    = toFloat count / toFloat maxCount * svgH
+                            in
+                            Svg.rect
+                                [ SA.x      (String.fromFloat (toFloat i * bw + 0.5))
+                                , SA.y      (String.fromFloat (svgH - bh))
+                                , SA.width  (String.fromFloat (max 1 (bw - 1)))
+                                , SA.height (String.fromFloat (max 0 bh))
+                                , SA.fill "#74b9ff"
+                                , SA.rx "1"
+                                ]
+                                []
+                        )
+
+            pMarker val colour lbl =
+                let
+                    x = clamp 0 svgW ((val - toFloat minCT) / toFloat range * svgW)
+                in
+                [ Svg.line
+                    [ SA.x1 (String.fromFloat x), SA.y1 "0"
+                    , SA.x2 (String.fromFloat x), SA.y2 (String.fromFloat svgH)
+                    , SA.stroke colour, SA.strokeWidth "1.5"
+                    , SA.strokeDasharray "4,3"
+                    ]
+                    []
+                , Svg.text_
+                    [ SA.x (String.fromFloat (x + 3)), SA.y "11"
+                    , SA.fontSize "9", SA.fill colour
+                    ]
+                    [ text lbl ]
+                ]
+
+            xTick t anchor =
+                Svg.text_
+                    [ SA.x (String.fromFloat (clamp 0 svgW (toFloat (t - minCT) / toFloat range * svgW)))
+                    , SA.y (String.fromFloat (svgH + 12))
+                    , SA.textAnchor anchor, SA.fontSize "9", SA.fill "#636e72"
+                    ]
+                    [ text (String.fromInt t ++ " t") ]
+        in
+        Svg.svg
+            [ SA.viewBox ("0 0 760 " ++ String.fromFloat (svgH + 15))
+            , SA.width "760"
+            , SA.height (String.fromFloat (svgH + 15))
+            , style "display" "block"
+            , style "border" "1px solid #e0e0e0"
+            , style "background" "#f8f9fa"
+            ]
+            (bars
+                ++ pMarker m.p50CycleTime "#00b894" "p50"
+                ++ pMarker m.p95CycleTime "#e17055" "p95"
+                ++ [ xTick minCT "start", xTick maxCT "end" ]
+            )
 
 
 viewEventLog : SimState -> Html msg
