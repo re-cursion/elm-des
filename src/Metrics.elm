@@ -3,6 +3,10 @@ module Metrics exposing
     , QueueMetrics
     , SystemMetrics
     , compute
+    , BusySegment
+    , QueueStep
+    , Timelines
+    , computeTimelines
     )
 
 import Dict exposing (Dict)
@@ -251,6 +255,120 @@ updateQueue qid delta t acc =
         , queueMaxLen   = Dict.insert qid newMax acc.queueMaxLen
         , queueTimeSum  = Dict.insert qid newTimeSum acc.queueTimeSum
         , queueLastTick = Dict.insert qid t acc.queueLastTick
+    }
+
+
+-- ── Timeline types & computation ─────────────────────────────────────────────
+
+type alias BusySegment =
+    { from : Int
+    , to   : Int
+    }
+
+
+type alias QueueStep =
+    { t   : Int
+    , len : Int
+    }
+
+
+type alias Timelines =
+    { totalTicks  : Int
+    , nodeBusy    : Dict Int (List BusySegment)
+    , queueLength : Dict Int (List QueueStep)
+    }
+
+
+computeTimelines : SimState -> Timelines
+computeTimelines state =
+    let
+        totalTicks =
+            eventTime2Int state.clock
+
+        chronological =
+            List.reverse state.eventLog
+
+        acc0 : TlAcc
+        acc0 =
+            { svcStart  = Dict.empty
+            , busySegs  = Dict.empty
+            , queueLen  = Dict.empty
+            , queueHist = Dict.empty
+            }
+
+        acc =
+            List.foldl tlStep acc0 chronological
+
+        -- Close any segment that is still open (worker busy at end of run)
+        closedBusy =
+            Dict.foldl
+                (\nid startT segs ->
+                    Dict.update nid
+                        (Just << (::) { from = startT, to = totalTicks } << Maybe.withDefault [])
+                        segs
+                )
+                acc.busySegs
+                acc.svcStart
+    in
+    { totalTicks  = totalTicks
+    , nodeBusy    = Dict.map (\_ segs -> List.reverse segs) closedBusy
+    , queueLength = Dict.map (\_ steps -> List.reverse steps) acc.queueHist
+    }
+
+
+type alias TlAcc =
+    { svcStart  : Dict Int Int
+    , busySegs  : Dict Int (List BusySegment)
+    , queueLen  : Dict Int Int
+    , queueHist : Dict Int (List QueueStep)
+    }
+
+
+tlStep : Event.Event -> TlAcc -> TlAcc
+tlStep evt acc =
+    let
+        t = eventTime2Int evt.time
+    in
+    case evt.kind of
+        ServiceStarted (NodeID nid) _ ->
+            { acc | svcStart = Dict.insert nid t acc.svcStart }
+
+        ServiceComplete (NodeID nid) _ ->
+            case Dict.get nid acc.svcStart of
+                Nothing ->
+                    acc
+
+                Just startT ->
+                    { acc
+                        | svcStart = Dict.remove nid acc.svcStart
+                        , busySegs =
+                            Dict.update nid
+                                (Just << (::) { from = startT, to = t } << Maybe.withDefault [])
+                                acc.busySegs
+                    }
+
+        JobEnqueued (QueueID qid) _ ->
+            tlUpdateQueue qid 1 t acc
+
+        JobDequeued (QueueID qid) _ _ ->
+            tlUpdateQueue qid -1 t acc
+
+        _ ->
+            acc
+
+
+tlUpdateQueue : Int -> Int -> Int -> TlAcc -> TlAcc
+tlUpdateQueue qid delta t acc =
+    let
+        newLen =
+            max 0 ((Dict.get qid acc.queueLen |> Maybe.withDefault 0) + delta)
+    in
+    { acc
+        | queueLen  = Dict.insert qid newLen acc.queueLen
+        , queueHist =
+            Dict.update qid
+                (Just << (::) { t = t, len = newLen } << Maybe.withDefault [])
+                acc.queueHist
     }
 
 

@@ -298,6 +298,7 @@ view model =
         , viewCanvas model.simState
         , viewScrubber model
         , viewLiveMetrics model.simState
+        , viewHistory model
         , viewEventLog model.simState
         , viewEnsemblePanel model
         ]
@@ -688,6 +689,159 @@ viewScrubber model =
                     ]
                     []
                 ]
+
+
+-- ── Sparkline history ─────────────────────────────────────────────────────────
+-- Hidden during Playing to avoid scanning the full event log at 60 fps.
+
+viewHistory : Model -> Html msg
+viewHistory model =
+    case model.playback of
+        Playing _ ->
+            text ""
+
+        _ ->
+            let
+                tl = Metrics.computeTimelines model.simState
+            in
+            if tl.totalTicks == 0 then
+                text ""
+            else
+                div [ style "margin-bottom" "1rem" ]
+                    [ h2 [] [ text "History" ]
+                    , sparkLabel "Worker busy / idle"
+                    , busyStrip tl
+                    , sparkLabel "Q1 length"
+                    , queueChart 1 model.simState tl
+                    , sparkLabel "Q2 length"
+                    , queueChart 2 model.simState tl
+                    ]
+
+
+sparkLabel : String -> Html msg
+sparkLabel s =
+    div [ style "font-size" "0.75em", style "color" "#636e72", style "margin-top" "0.4rem" ]
+        [ text s ]
+
+
+busyStrip : Metrics.Timelines -> Html msg
+busyStrip tl =
+    let
+        w = 760.0
+        h = 18.0
+
+        segs =
+            Dict.get 2 tl.nodeBusy |> Maybe.withDefault []
+
+        sx t =
+            toFloat t / toFloat (max 1 tl.totalTicks) * w
+
+        busyRects =
+            List.map
+                (\s ->
+                    Svg.rect
+                        [ SA.x      (String.fromFloat (sx s.from))
+                        , SA.y      "0"
+                        , SA.width  (String.fromFloat (max 1 (sx s.to - sx s.from)))
+                        , SA.height (String.fromFloat h)
+                        , SA.fill   "#00b894"
+                        , SA.opacity "0.85"
+                        ]
+                        []
+                )
+                segs
+    in
+    Svg.svg
+        [ SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
+        , SA.width (String.fromFloat w)
+        , SA.height (String.fromFloat h)
+        , style "display" "block"
+        , style "border" "1px solid #e0e0e0"
+        ]
+        (Svg.rect
+            [ SA.x "0", SA.y "0"
+            , SA.width (String.fromFloat w), SA.height (String.fromFloat h)
+            , SA.fill "#f0f0f0"
+            ]
+            []
+            :: busyRects
+        )
+
+
+queueChart : Int -> SimState -> Metrics.Timelines -> Html msg
+queueChart qid state tl =
+    let
+        w = 760.0
+        h = 36.0
+
+        cap =
+            SimState.getQueue (QueueID qid) state
+                |> Maybe.map Queue.capacity
+                |> Maybe.withDefault 1
+
+        steps =
+            Dict.get qid tl.queueLength |> Maybe.withDefault []
+
+        pts =
+            stepPolyline w h tl.totalTicks cap steps
+    in
+    Svg.svg
+        [ SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
+        , SA.width (String.fromFloat w)
+        , SA.height (String.fromFloat h)
+        , style "display" "block"
+        , style "border" "1px solid #e0e0e0"
+        ]
+        [ Svg.rect
+            [ SA.x "0", SA.y "0"
+            , SA.width (String.fromFloat w), SA.height (String.fromFloat h)
+            , SA.fill "#f8f9fa"
+            ]
+            []
+        , Svg.polyline
+            [ SA.points pts
+            , SA.fill "#74b9ff"
+            , SA.fillOpacity "0.35"
+            , SA.stroke "#0984e3"
+            , SA.strokeWidth "1.5"
+            , SA.strokeLinejoin "miter"
+            ]
+            []
+        ]
+
+
+-- Build a closed step-function polyline (suitable for filled area rendering).
+-- Points run: bottom-left → step function top → bottom-right → close.
+stepPolyline : Float -> Float -> Int -> Int -> List Metrics.QueueStep -> String
+stepPolyline w h totalTicks cap steps =
+    let
+        sx t   = toFloat t / toFloat (max 1 totalTicks) * w
+        sy len = h - toFloat len / toFloat (max 1 cap) * h
+
+        ( _, innerPts ) =
+            List.foldl
+                (\step ( prevLen, acc ) ->
+                    ( step.len
+                    , acc
+                        ++ [ ( sx step.t, sy prevLen )
+                           , ( sx step.t, sy step.len )
+                           ]
+                    )
+                )
+                ( 0, [] )
+                steps
+
+        lastLen =
+            List.reverse steps |> List.head |> Maybe.map .len |> Maybe.withDefault 0
+
+        allPts =
+            [ ( 0, h ), ( 0, sy 0 ) ]
+                ++ innerPts
+                ++ [ ( w, sy lastLen ), ( w, h ) ]
+    in
+    allPts
+        |> List.map (\( x, y ) -> String.fromFloat x ++ "," ++ String.fromFloat y)
+        |> String.join " "
 
 
 viewEventLog : SimState -> Html msg
