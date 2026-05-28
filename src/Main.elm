@@ -1,10 +1,11 @@
 module Main exposing (main)
 
 import Browser
+import Browser.Events
 import Dict
 import Engine
 import Event exposing (EventType(..))
-import EventTime exposing (EventTime(..), eventTime2Int)
+import EventTime exposing (EventTime(..), addTimes, eventTime2Int)
 import Html exposing (Html, button, div, h2, li, p, span, text, ul)
 import Html.Attributes exposing (style)
 import Html.Events exposing (onClick)
@@ -17,8 +18,8 @@ import SimState exposing (SimState)
 import Topology exposing (Topology)
 
 
--- ── Scenario wiring ───────────────────────────────────────────────────────────
--- Simple 3-node chain: Source → [Queue 1] → Worker → [Queue 2] → Sink
+-- ── Scenario ──────────────────────────────────────────────────────────────────
+-- Source(1) → [Q1] → Worker(2) → [Q2] → Sink(3)
 
 scenario : ( Topology, SimState )
 scenario =
@@ -36,38 +37,55 @@ scenario =
         workerCfg =
             { serviceRate = 0.5, preemptive = False, signoff = Nothing }
 
-        q1 =
+        q =
             Queue.empty { capacity = 5, discipline = Queue.FIFO, overflow = Queue.Block }
-
-        q2 =
-            Queue.empty { capacity = 5, discipline = Queue.FIFO, overflow = Queue.Block }
-
-        seed =
-            Random.initialSeed 42
 
         ( firstJobID, state0 ) =
-            SimState.nextJobID (SimState.init seed)
+            SimState.nextJobID (SimState.init (Random.initialSeed 42))
 
-        state1 =
+        state =
             state0
                 |> SimState.putNode (NodeID 1) (makeSource "Source" sourceCfg)
                 |> SimState.putNode (NodeID 2) (makeWorker "Worker" workerCfg)
                 |> SimState.putNode (NodeID 3) (makeSink "Sink")
-                |> SimState.putQueue (QueueID 1) q1
-                |> SimState.putQueue (QueueID 2) q2
-                -- kick off first arrival
+                |> SimState.putQueue (QueueID 1) q
+                |> SimState.putQueue (QueueID 2) q
                 |> SimState.scheduleEvent
                     (Event.event (EventTime 0) (JobArrived (NodeID 1) firstJobID))
     in
-    ( topo, state1 )
+    ( topo, state )
+
+
+-- ── Playback ──────────────────────────────────────────────────────────────────
+
+type PlaybackMode
+    = Stopped
+    | Playing Float   -- simulated time-units per real second
+
+
+-- Above this speed, drain all pending events in one frame instead of pacing.
+maxAnimatedSpeed : Float
+maxAnimatedSpeed =
+    500.0
+
+
+speeds : List ( String, PlaybackMode )
+speeds =
+    [ ( "Pause",  Stopped )
+    , ( "×1",     Playing 1 )
+    , ( "×10",    Playing 10 )
+    , ( "×100",   Playing 100 )
+    , ( "Max",    Playing maxAnimatedSpeed )
+    ]
 
 
 -- ── Model ─────────────────────────────────────────────────────────────────────
 
 type alias Model =
-    { topo     : Topology
-    , simState : SimState
-    , paused   : Bool
+    { topo        : Topology
+    , simState    : SimState
+    , playback    : PlaybackMode
+    , accumulator : Float     -- fractional sim-time units carried between frames
     }
 
 
@@ -77,7 +95,9 @@ init _ =
         ( topo, simState ) =
             scenario
     in
-    ( { topo = topo, simState = simState, paused = True }, Cmd.none )
+    ( { topo = topo, simState = simState, playback = Stopped, accumulator = 0 }
+    , Cmd.none
+    )
 
 
 -- ── Update ────────────────────────────────────────────────────────────────────
@@ -86,18 +106,26 @@ type Msg
     = Step
     | RunToEnd
     | Reset
+    | SetPlayback PlaybackMode
+    | Tick
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         Step ->
-            ( { model | simState = Engine.processNextEvent model.topo model.simState }
+            ( { model
+                | simState = Engine.processNextEvent model.topo model.simState
+                , playback = Stopped
+              }
             , Cmd.none
             )
 
         RunToEnd ->
-            ( { model | simState = Engine.drainAll model.topo model.simState }
+            ( { model
+                | simState = Engine.drainAll model.topo model.simState
+                , playback = Stopped
+              }
             , Cmd.none
             )
 
@@ -106,7 +134,59 @@ update msg model =
                 ( topo, simState ) =
                     scenario
             in
-            ( { model | topo = topo, simState = simState }, Cmd.none )
+            ( { model | topo = topo, simState = simState, playback = Stopped, accumulator = 0 }
+            , Cmd.none
+            )
+
+        SetPlayback mode ->
+            ( { model | playback = mode, accumulator = 0 }
+            , Cmd.none
+            )
+
+        Tick ->
+            case model.playback of
+                Stopped ->
+                    ( model, Cmd.none )
+
+                Playing n ->
+                    if n >= maxAnimatedSpeed then
+                        ( { model | simState = Engine.drainAll model.topo model.simState }
+                        , Cmd.none
+                        )
+
+                    else
+                        let
+                            newAcc =
+                                model.accumulator + n / 60.0
+
+                            simUnits =
+                                floor newAcc
+
+                            newState =
+                                if simUnits > 0 then
+                                    Engine.advanceUntil
+                                        (addTimes model.simState.clock (EventTime simUnits))
+                                        model.topo
+                                        model.simState
+                                else
+                                    model.simState
+                        in
+                        ( { model
+                            | simState    = newState
+                            , accumulator = newAcc - toFloat simUnits
+                          }
+                        , Cmd.none
+                        )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    case model.playback of
+        Playing _ ->
+            Browser.Events.onAnimationFrame (\_ -> Tick)
+
+        Stopped ->
+            Sub.none
 
 
 -- ── View ──────────────────────────────────────────────────────────────────────
@@ -115,7 +195,7 @@ view : Model -> Html Msg
 view model =
     div [ style "font-family" "monospace", style "padding" "1rem" ]
         [ h2 [] [ text "elm-des — Discrete Event Simulation" ]
-        , viewControls
+        , viewPlaybackControls model.playback
         , viewClock model.simState
         , viewQueues model.simState
         , viewNodes model.simState
@@ -123,13 +203,40 @@ view model =
         ]
 
 
-viewControls : Html Msg
-viewControls =
+viewPlaybackControls : PlaybackMode -> Html Msg
+viewPlaybackControls current =
     div [ style "margin-bottom" "1rem" ]
-        [ btn Step    "Step"
-        , btn RunToEnd "Run to end"
-        , btn Reset   "Reset"
+        (List.map (speedBtn current) speeds
+            ++ [ separator
+               , btn Step    "Step"
+               , btn RunToEnd "Run to end"
+               , btn Reset   "Reset"
+               ]
+        )
+
+
+speedBtn : PlaybackMode -> ( String, PlaybackMode ) -> Html Msg
+speedBtn current ( label, mode ) =
+    let
+        isActive =
+            current == mode
+
+        bg =
+            if isActive then "#333" else "#eee"
+
+        fg =
+            if isActive then "#fff" else "#333"
+    in
+    button
+        [ onClick (SetPlayback mode)
+        , style "margin-right" "0.25rem"
+        , style "padding" "0.25rem 0.75rem"
+        , style "background" bg
+        , style "color" fg
+        , style "border" "1px solid #999"
+        , style "cursor" "pointer"
         ]
+        [ text label ]
 
 
 btn : Msg -> String -> Html Msg
@@ -138,8 +245,15 @@ btn msg label =
         [ onClick msg
         , style "margin-right" "0.5rem"
         , style "padding" "0.25rem 0.75rem"
+        , style "border" "1px solid #999"
+        , style "cursor" "pointer"
         ]
         [ text label ]
+
+
+separator : Html msg
+separator =
+    span [ style "margin-right" "0.75rem" ] [ text "|" ]
 
 
 viewClock : SimState -> Html msg
@@ -289,8 +403,8 @@ describeEvent kind =
 main : Program () Model Msg
 main =
     Browser.element
-        { init = init
-        , update = update
-        , view = view
-        , subscriptions = \_ -> Sub.none
+        { init          = init
+        , update        = update
+        , view          = view
+        , subscriptions = subscriptions
         }

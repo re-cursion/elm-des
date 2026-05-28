@@ -35,7 +35,7 @@ queues. The *kind* of work it performs determines its subtype:
 | Node kind | What it does |
 |---|---|
 | **Source** | Generates new jobs (Poisson inter-arrival times) |
-| **Worker** | Processes one job at a time (Poisson service time) |
+| **Worker** | Processes one job at a time (configurable service-time distribution) |
 | **Dispatcher** | Routes jobs to one of N output queues (with delay) |
 | **Sink** | Absorbs finished jobs and records completion stats |
 | **Boss** *(later)* | Broadcasts a "stop" event that pauses all Workers |
@@ -160,6 +160,68 @@ processNextEvent topology state =
 schedule. State transitions and event generation are always co-located in the
 same handler, making causality easy to trace.
 
+### Service Time Distributions
+
+Service time is a property of the **node** (its `WorkerConfig`) — the node
+represents a capability (crane, cashier, dock worker) whose speed is stable.
+
+A job's **size** (`job.size : Float`, default `1.0`) scales the median duration.
+This models jobs that are intrinsically more or less work regardless of who
+handles them — a warship takes longer than a freighter at every dock worker.
+
+```
+actual_duration  =  sample(node.serviceTime)  ×  job.size
+```
+
+#### Why not Poisson?
+
+Poisson is a **count** distribution — it answers "how many arrivals in the next
+N ticks?" It is discrete and always ≥ 0, so it is used for arrival processes,
+not durations. The duration distribution that naturally pairs with a Poisson
+arrival process is the **exponential** (inter-event times of a Poisson stream
+are exponentially distributed). M/M/1 queueing theory uses exponential service
+times exactly for this reason.
+
+The limitation of exponential is that its peak is at zero — the most likely
+service time is the shortest one. Real tasks have a mode well above zero with a
+tail toward longer times. That calls for different distributions.
+
+#### The `ServiceTime` type
+
+```elm
+type ServiceTime
+    = Exponential Float          -- mean = 1/rate; memoryless; peak at zero
+    | LogNormal Float Float      -- mu sigma; median = exp(mu); right-skewed tail; hard cutoff at 0
+    | Erlang Int Float           -- k phases at rate r; mean = k/r; more bell-shaped than exponential
+    | Deterministic Int          -- always exactly N ticks (machinery, conveyors)
+    | Uniform Int Int            -- flat in [lo, hi] ticks
+```
+
+| Distribution | When it fits |
+|---|---|
+| `Exponential` | Truly random/bursty work (bosmang mood, support queue) |
+| `LogNormal mu sigma` | Human tasks: peaked around a typical time, occasional long outliers. Standard fit for software estimates, manual labour, inspections. Small sigma → near-deterministic; large sigma → heavy tail |
+| `Erlang k r` | Multi-phase service requiring k sub-steps each taking ~1/r ticks. Less variance than exponential; useful when "it always takes *at least* a few steps" |
+| `Deterministic n` | Fixed mechanical time: crane cycle, conveyor belt, automated test suite |
+| `Uniform lo hi` | Roughly fixed but with known slack, e.g. a 3–7 minute coffee break |
+
+`LogNormal` is the default recommendation for human operators.
+`Deterministic` + `Erlang` cover machinery and multi-step assembly.
+
+#### In the Belter shipyard
+
+| Node | Suggested distribution | Rationale |
+|---|---|---|
+| Hull welder | `LogNormal 2.0 0.5` | Skilled but variable — some welds are nastier |
+| Systems tech | `LogNormal 1.8 0.4` | Similar; slightly faster |
+| Bosmang sign-off | `LogNormal 1.2 0.7` | Unpredictable; sometimes very quick, sometimes lengthy |
+| Airlock cycle | `Deterministic 3` | Fixed mechanical procedure |
+
+Ship sizes: MCRN warship `size = 3.0`, medivac `size = 1.5`, civilian hauler
+`size = 1.0`, derelict `size = 0.6`.
+
+---
+
 ### Node State Machine
 
 Every Worker node follows:
@@ -193,8 +255,8 @@ type LockID = LockID String
 type alias Lock =
     { id          : LockID
     , label       : String
-    , capacity    : Int       -- how many simultaneous sign-offs
-    , serviceTime : Float     -- mean time to approve one job (Poisson)
+    , capacity    : Int          -- how many simultaneous sign-offs
+    , serviceTime : ServiceTime  -- how long each approval takes (see ServiceTime type)
     }
 ```
 
@@ -257,7 +319,7 @@ utilisation and cycle-time charts.
 
 ```json
 "locks": [
-  { "id": "bosmang", "label": "Bosmang inspection", "capacity": 1, "serviceTime": 4.0 }
+  { "id": "bosmang", "label": "Bosmang inspection", "capacity": 1, "serviceTime": { "kind": "log-normal", "mu": 1.2, "sigma": 0.7 } }
 ],
 "nodes": [
   { "id": 2, "kind": "worker", "label": "Hull welder", "signoff": "bosmang", ... }
@@ -338,9 +400,10 @@ Those live entirely in `Main.elm`'s subscription/update loop.
 
 | Mode | Behaviour |
 |---|---|
-| `Paused` | Nothing advances; user must click "Step" |
+| `Stopped` | Nothing advances; user must click "Step" or pick a speed |
 | `Stepping` | One event per click; good for debugging |
-| `Playing N` | `Time.every` fires at a rate derived from `N`; see below |
+| `Playing N` | Animation loop fires 60×/s; advances `N/60` simulated units per frame |
+| `Scrubbing T` | Sim already complete; display time `T` driven by a time slider |
 
 #### `Playing N` — wall-clock pacing
 
@@ -393,6 +456,187 @@ At `Infinity` the simulation finishes in a single update cycle; the UI then
 shows the final state and full event log. This doubles as the "run to
 completion" button without needing a separate code path.
 
+#### Scrubbing mode — time travel through a completed run
+
+Once a simulation has run to completion its full event log is preserved.
+`Scrubbing` is a fourth playback mode in which a time slider controls which
+moment in the simulation is displayed. The engine is not called; instead the
+view derives the display state from the log up to the selected time.
+
+```elm
+type PlaybackMode
+    = Stopped
+    | Stepping
+    | Playing Float
+    | Scrubbing EventTime   -- display time driven by slider; sim already complete
+```
+
+Going backward is not possible by un-applying events, so the approach is
+**periodic snapshots**: during a run (or at the moment `drainAll` completes)
+the engine records a checkpoint `SimState` every `snapshotInterval` events.
+
+```elm
+type alias CompletedRun =
+    { snapshots        : Array SimState   -- checkpoint every snapshotInterval events
+    , snapshotInterval : Int              -- e.g. 100 events per checkpoint
+    , finalState       : SimState         -- state at t_max
+    }
+```
+
+Scrubbing to time `T`:
+1. Find the largest snapshot with `snapshot.clock ≤ T`
+2. Call `advanceUntil T topo snapshot` to replay forward to `T`
+3. Render the resulting state plus all metrics derived from events up to `T`
+
+The `Model` holds both the live state and the completed run:
+
+```elm
+type alias Model =
+    { scenario     : ScenarioConfig
+    , topology     : Topology
+    , simState     : SimState          -- live state during Playing/Stepping
+    , completedRun : Maybe CompletedRun  -- populated once simulation ends
+    , playback     : PlaybackMode
+    , camera       : Camera            -- isometric camera (Phase 5+)
+    , theme        : Theme
+    }
+```
+
+Switching from `Playing` to `Scrubbing` is triggered either by reaching the
+end of the event queue or by clicking "Run to end". Switching back to `Playing`
+from a scrub position resumes from that position (the scrub becomes the new
+`simState`).
+
+**Practical use**: run the simulation at Max speed, then scrub back to the
+interesting moment — the bosmang interruption, a queue overflow, a preemption
+— and watch it frame-by-frame at ×1. This is the primary demo workflow.
+
+---
+
+## Metrics & Observability
+
+### The event log as ground truth
+
+`SimState.eventLog` is a complete, ordered record of every state change. Every
+metric the system could report is derivable from it by a single linear scan.
+No separate counters or accumulators are needed during the simulation run —
+metrics are a pure function of the log.
+
+```elm
+-- Metrics.elm  (new module, Phase 3)
+computeMetrics : EventTime -> List Event -> SystemMetrics
+```
+
+The argument `EventTime` is the current display time (for scrubbing); only
+events up to that time are included.
+
+### Metric catalogue
+
+| Metric | Derived from |
+|---|---|
+| **Worker utilisation** | `Σ (ServiceComplete.time − ServiceStarted.time)` ÷ elapsed time, per node |
+| **Throughput** | count `JobArrived sinkId` per time window |
+| **Cycle time** (per job) | `JobArrived sinkId` − `JobArrived sourceId` for the same `JobID` |
+| **Queue length over time** | replay `JobEnqueued` / `JobDequeued` / `JobDropped` per queue |
+| **Wait time in queue** | `JobDequeued.time − JobEnqueued.time` per (queue, job) pair |
+| **Service time** (actual) | `ServiceComplete.time − ServiceStarted.time` per job |
+| **Sign-off latency** | `SignoffComplete.time − SignoffRequested.time` per job |
+| **Blocking time** | time a node spent in `WaitingForOutput` state |
+| **Drop rate** | count `JobDropped` per queue ÷ total arrivals |
+| **Meeting overhead** | `Σ (MeetingEnded.time − MeetingStarted.time)` as % of elapsed |
+
+Aggregate statistics (mean, p50, p95, max) are computed over each job-level
+series. Cycle time, wait time, and service time are the most useful for demos.
+
+```elm
+type alias NodeMetrics =
+    { utilisation    : Float                        -- 0.0..1.0
+    , jobsProcessed  : Int
+    , avgServiceTime : Float
+    , busyIntervals  : List ( EventTime, EventTime )  -- for the timeline strip
+    }
+
+type alias QueueMetrics =
+    { avgLength     : Float
+    , maxLength     : Int
+    , dropCount     : Int
+    , lengthHistory : List ( EventTime, Int )         -- for sparklines
+    }
+
+type alias JobMetrics =
+    { jobId       : JobID
+    , cycleTime   : Int    -- ticks from source to sink
+    , waitTime    : Int    -- ticks spent in queues
+    , serviceTime : Int    -- ticks actually being processed
+    , signoffTime : Int    -- ticks waiting for sign-off
+    }
+
+type alias SystemMetrics =
+    { throughput    : Float           -- completed jobs per time unit
+    , avgCycleTime  : Float
+    , p50CycleTime  : Float
+    , p95CycleTime  : Float
+    , totalDropped  : Int
+    , nodes         : Dict Int NodeMetrics
+    , queues        : Dict Int QueueMetrics
+    , jobs          : List JobMetrics
+    }
+```
+
+### Visualisation — the scene is the dashboard
+
+Metrics live close to the things they describe. There are three display layers:
+
+#### Layer 1 — inline indicators (always visible)
+
+Rendered directly on the node or queue shape in the scene:
+
+| Element | Inline indicator |
+|---|---|
+| Worker node | Utilisation bar along one edge (0–100 % fill, colour shifts green → amber → red) |
+| Queue | Slot fill level is the visualisation; a small number badge shows current length |
+| Queue (overflow) | Drop counter badge in a warning colour; flashes on each drop |
+| Edge / connector | Throughput label (jobs/time unit) or animated flow thickness |
+
+In the isometric view these become overlays on the box faces — the utilisation
+bar sits on the front face; queue fill is literal (job cubes occupying slots).
+
+#### Layer 2 — sparklines attached to the scene
+
+Small time-series charts floating just above or beside each element, in scene
+coordinates so they rotate with the isometric view:
+
+| Element | Sparkline |
+|---|---|
+| Worker node | Busy/idle timeline strip (green = busy, grey = idle, red = blocked) |
+| Queue | Queue-length histogram over time |
+| Lock | Sign-off latency distribution (small bar chart) |
+
+Sparklines cover only the last `sparklineWindow` time units (configurable).
+At high playback speeds they update in real time; in Scrubbing mode they show
+the full history up to the scrub position.
+
+#### Layer 3 — global metrics panel
+
+A collapsible side panel showing aggregate system statistics:
+
+- End-to-end cycle time: histogram of all completed jobs, with p50/p95 lines
+- Throughput over time: rolling average
+- System utilisation: average across all workers (single number + history chart)
+- Queue drop events: timeline of drops per queue
+- Meeting overhead: fraction of elapsed time workers spent paused
+
+The panel is entirely derived from `SystemMetrics`; it has no simulation state
+of its own.
+
+### Metrics and time travel
+
+When the user scrubs to time `T`, all three layers update to show metrics
+computed from events `[0..T]`. The sparklines truncate at `T`. The global
+panel reflects the state of the system at that moment. This makes it possible
+to scrub to the instant before and after a bosmang meeting and see utilisation
+drop to zero in real time.
+
 ---
 
 ## Data Model (Proposed)
@@ -413,10 +657,20 @@ type Priority
     | High
     | Critical    -- e.g. warship, ambulance, emergency packet
 
+-- Service time distributions (node property; see "Service Time Distributions" section)
+type ServiceTime
+    = Exponential Float          -- mean = 1/rate
+    | LogNormal Float Float      -- mu sigma; median = exp(mu)
+    | Erlang Int Float           -- k phases at rate r
+    | Deterministic Int          -- always exactly N ticks
+    | Uniform Int Int            -- uniform in [lo, hi] ticks
+
 -- Jobs
 type alias Job =
     { id        : JobID
     , priority  : Priority
+    , size      : Float                          -- scales service duration (1.0 = baseline)
+    , label     : String
     , arrivedAt : EventTime
     , history   : List (EventTime, EventType)   -- for cycle-time tracking
     }
@@ -446,10 +700,10 @@ type NodeState
     | BossNode    BossState
 
 type alias WorkerState =
-    { activity     : WorkerActivity
-    , serviceParam : Float          -- mean of Poisson distribution (in time units)
-    , signoff      : Maybe LockID   -- lock to acquire before releasing output
-    , preemptive   : Bool
+    { activity    : WorkerActivity
+    , serviceTime : ServiceTime     -- distribution for how long this node takes per job
+    , signoff     : Maybe LockID    -- lock to acquire before releasing output
+    , preemptive  : Bool
     }
 
 type WorkerActivity
@@ -467,19 +721,29 @@ type alias Topology =
     }
 
 -- Playback control (separate from the engine)
+-- See "Scrubbing mode" in the Playback Layer section for full semantics.
 type PlaybackMode
-    = Paused
+    = Stopped
     | Stepping                    -- advance one event per user click
     | Playing Float               -- N simulated time-units shown per real second
+    | Scrubbing EventTime         -- display time driven by slider; sim already complete
+
+-- Completed run — populated once the event queue drains
+type alias CompletedRun =
+    { snapshots        : Array SimState   -- checkpoint every snapshotInterval events
+    , snapshotInterval : Int
+    , finalState       : SimState
+    }
 
 -- Theme (swappable skin, no engine logic) — mirrors Theme2D above
 type alias Theme =
-    { defs       : Svg Msg
-    , background : Int -> Int -> Svg Msg
-    , nodeView   : NodeID -> NodeState -> NodeKind -> Svg Msg
-    , queueView  : QueueID -> QueueState -> Svg Msg
-    , jobView    : Job -> JobVisual -> Svg Msg
-    , vocab      : Vocabulary
+    { defs           : Svg Msg
+    , background     : Int -> Int -> Svg Msg
+    , nodeView       : NodeID -> NodeState -> NodeMetrics -> Svg Msg
+    , queueView      : QueueID -> QueueState -> QueueMetrics -> Svg Msg
+    , jobView        : Job -> JobVisual -> Svg Msg
+    , sparklineView  : NodeID -> NodeMetrics -> Svg Msg      -- Layer 2: timeline strip
+    , vocab          : Vocabulary
     }
 
 type alias Vocabulary =
@@ -491,11 +755,13 @@ type alias Vocabulary =
 
 -- Full model
 type alias Model =
-    { scenario : ScenarioConfig     -- decoded from JSON; drives topology + initial state
-    , topology : Topology
-    , simState : SimState
-    , playback : PlaybackMode
-    , theme    : Theme
+    { scenario     : ScenarioConfig     -- decoded from JSON; drives topology + initial state
+    , topology     : Topology
+    , simState     : SimState           -- live state during Playing/Stepping
+    , completedRun : Maybe CompletedRun -- populated once simulation ends
+    , playback     : PlaybackMode
+    , camera       : Camera             -- isometric camera (Phase 5+); ignored in 2D
+    , theme        : Theme
     }
 ```
 
@@ -519,8 +785,8 @@ add or change a scenario.
   },
   "nodes": [
     { "id": 1, "kind": "source",     "label": "Docking collar",    "x": 80,  "y": 200, "arrivalRate": 0.4, "priority": "normal" },
-    { "id": 2, "kind": "worker",     "label": "Hull welder",        "x": 280, "y": 120, "serviceRate": 2.5, "preemptive": true },
-    { "id": 3, "kind": "worker",     "label": "Systems tech",       "x": 280, "y": 280, "serviceRate": 3.0, "preemptive": false },
+    { "id": 2, "kind": "worker",     "label": "Hull welder",        "x": 280, "y": 120, "serviceTime": { "kind": "log-normal", "mu": 2.0, "sigma": 0.5 }, "preemptive": true },
+    { "id": 3, "kind": "worker",     "label": "Systems tech",       "x": 280, "y": 280, "serviceTime": { "kind": "log-normal", "mu": 1.8, "sigma": 0.4 }, "preemptive": false },
     { "id": 4, "kind": "dispatcher", "label": "Shift coordinator",  "x": 480, "y": 200, "rule": "shortest-queue", "dispatchTime": 0.5 },
     { "id": 5, "kind": "sink",       "label": "Airlock out",        "x": 680, "y": 200 },
     { "id": 6, "kind": "boss",       "label": "Bosmang",            "x": 200, "y": 400 }
@@ -547,10 +813,10 @@ add or change a scenario.
     { "at": 120, "kind": "boss-meeting", "nodeId": 6, "duration": 10, "label": "Emergency drill" }
   ],
   "jobTypes": [
-    { "priority": "critical", "label": "MCRN warship",      "weight": 0.05 },
-    { "priority": "high",     "label": "Medivac freighter",  "weight": 0.15 },
-    { "priority": "normal",   "label": "Civilian hauler",    "weight": 0.60 },
-    { "priority": "low",      "label": "Derelict for parts", "weight": 0.20 }
+    { "priority": "critical", "label": "MCRN warship",      "weight": 0.05, "size": 3.0 },
+    { "priority": "high",     "label": "Medivac freighter",  "weight": 0.15, "size": 1.5 },
+    { "priority": "normal",   "label": "Civilian hauler",    "weight": 0.60, "size": 1.0 },
+    { "priority": "low",      "label": "Derelict for parts", "weight": 0.20, "size": 0.6 }
   ]
 }
 ```
@@ -578,23 +844,72 @@ Scenarios can be:
 
 ---
 
-## Theming (2D and 3D)
+## Theming (2D, Isometric, WebGL)
 
 A theme is a pure mapping from simulation entities to visual representations.
-The engine never knows a theme exists.
+The engine never knows a theme exists. Each renderer tier (flat 2D SVG,
+rotatable isometric SVG, full WebGL) uses the same `SpriteSource` and
+`Background` types but a different scene graph.
 
-### 2D (SVG) — current target
+---
+
+### Sprites and backgrounds — shared types
+
+```elm
+-- Where a visual comes from; used by all renderer tiers
+type SpriteSource
+    = VectorSymbol String        -- SVG <symbol> id defined in defs; stamped with <use>
+    | RasterImage  String        -- URL to PNG/WebP; rendered via SVG <image> or WebGL texture
+    | SpriteSheet                -- clip one frame from a larger sheet
+        { url : String
+        , x   : Int, y : Int     -- top-left of the clip rect (pixels)
+        , w   : Int, h : Int
+        }
+
+-- Background of the whole canvas / scene
+type Background
+    = SolidColour  String                  -- CSS colour
+    | SVGPattern   String                  -- <pattern> id defined in defs (2D only)
+    | ImageBackground                      -- single image scaled to fill
+        { url     : String
+        , opacity : Float                  -- 0.0..1.0; tint over the image
+        }
+    | ParallaxBackground (List ParallaxLayer)
+
+type alias ParallaxLayer =
+    { url     : String
+    , depth   : Float  -- 0.0 = screen-fixed; 1.0 = moves 1:1 with camera
+    , opacity : Float
+    , tileX   : Bool
+    , tileY   : Bool
+    }
+```
+
+`SpriteSource` values are passed to the render layer, which knows whether to
+emit an SVG `<use>`, an SVG `<image>`, or a WebGL textured quad. The theme
+never calls a renderer API directly — it only declares *what* to show.
+
+No special asset-loading pipeline is needed in the browser: SVG `<image>` and
+CSS `background-image` accept URLs directly, and the browser handles caching.
+For WebGL textures the same URLs are loaded via `elm-explorations/webgl`.
+
+---
+
+### 2D (SVG) — Phase 3/4
 
 Each theme is an Elm record of rendering functions:
 
 ```elm
 type alias Theme2D =
-    { defs       : Svg msg                               -- SVG <defs>: symbols, patterns, filters
-    , background : Int -> Int -> Svg msg                 -- canvas width, height
-    , nodeView   : NodeID -> NodeState -> NodeKind -> Svg msg
-    , queueView  : QueueID -> QueueState -> Svg msg
-    , jobView    : Job -> JobVisual -> Svg msg            -- themed shape at a given position/state
-    , vocab      : Vocabulary
+    { background    : Background
+    , defs          : Svg msg              -- SVG <defs>: symbols, patterns, filters
+    , jobSprite     : Job -> SpriteSource  -- sprite for this job type/priority
+    , nodeSprite    : NodeID -> NodeState -> SpriteSource
+    , nodeView      : NodeID -> NodeState -> NodeMetrics -> Svg msg
+    , queueView     : QueueID -> QueueState -> QueueMetrics -> Svg msg
+    , jobView       : Job -> JobVisual -> Svg msg
+    , sparklineView : NodeID -> NodeMetrics -> Svg msg
+    , vocab         : Vocabulary
     }
 
 type alias JobVisual =
@@ -605,35 +920,47 @@ type alias JobVisual =
     }
 
 type JobVisualState
-    = InQueue    Int          -- slot index (0 = front); drives spacing along queue lane
-    | InTransit  Float        -- 0.0 just left source → 1.0 arrived; drives animation
-    | AtWorker                -- being processed; theme may add a progress ring etc.
-    | AwaitingSignoff         -- worker blocked, bosmang en route
+    = InQueue    Int          -- slot index (0 = front)
+    | InTransit  Float        -- 0.0 just left source → 1.0 arrived
+    | AtWorker                -- being processed; theme may add a progress ring
+    | AwaitingSignoff         -- worker blocked, approver en route
 ```
 
-#### Job shapes per theme
+#### Sprites in practice
 
-Jobs are not dots — they are small themed silhouettes defined once in `defs`
-as SVG `<symbol>` elements and stamped with `<use>` wherever a job appears.
-This keeps path data out of the render loop and lets the browser cache the shapes.
+Jobs are themed silhouettes. Vector shapes are defined once as `<symbol>`
+elements in `defs` and stamped with `<use>` — path data stays out of the
+render loop and the browser caches the shapes. Raster sprites are placed with
+`<image>` elements. A `SpriteSheet` clips a specific frame from a larger PNG.
 
-| Theme | Job shape | Variant per priority |
+| Theme | Job sprite | Variant per priority |
 |---|---|---|
-| `expanse` | Side-profile spaceship | Angular military hull (Critical) · white-cross medivac (High) · boxy hauler (Normal) · broken derelict (Low) |
+| `expanse` | Side-profile spaceship | Angular military hull (Critical) · medivac cross (High) · boxy hauler (Normal) · broken derelict (Low) |
 | `supermarket` | Top-down shopping trolley | Overflowing cart (High) · standard cart (Normal) · basket only (Low) |
 | `software-team` | Ticket / index card | Red border (Critical) · yellow (High) · white (Normal) · grey (Low) |
 | `traffic` | Top-down car | Ambulance/police (Critical) · taxi (High) · sedan (Normal) · old banger (Low) |
 | `cpu` | Labelled packet square | Colour-coded by priority |
 
-Each `jobView` call receives the `Job` (which carries its priority and type
-label) and a `JobVisual` describing where and how large to render it. The
-theme decides everything else — rotation, colour, glow, badge.
+Node sprites follow the same pattern: one `SpriteSource` per `(NodeID, NodeState)`
+pair. A worker node shows an idle sprite, a busy sprite (with a progress ring
+overlay), a blocked sprite, and a paused/dark sprite during a boss meeting.
+
+#### Background in 2D
+
+The background is rendered as the bottom layer of the SVG before any nodes or
+jobs are drawn:
+
+- `SolidColour` → a `<rect>` filling the canvas
+- `SVGPattern` → a `<rect>` with `fill="url(#patternId)"`
+- `ImageBackground` → `<image href="..." width="100%" height="100%">` with an
+  optional semi-transparent `<rect>` overlay for the tint
+- `ParallaxBackground` → multiple `<image>` layers; each layer's `x`/`y`
+  offset is driven by the camera pan position multiplied by its `depth` factor
+
+For the Expanse 2D theme: a dark station-interior photograph at low opacity
+behind the node/queue grid, giving depth without obscuring the simulation.
 
 #### Animated transit
-
-When a job moves between a queue and a node, the render layer creates a short
-animation. The simulation engine just fires an event; the view layer catches it
-and starts a tween:
 
 ```elm
 -- Purely visual — lives in Model, not SimState
@@ -648,15 +975,11 @@ type alias Transition =
     }
 ```
 
-On each `TickFrame` the progress values are advanced by `dt * speed`. When
-`progress` reaches 1.0 the transition is removed and the job snaps to its
-final position. At high playback speeds transitions are skipped entirely (jobs
-teleport) to avoid visual chaos.
+On each `TickFrame` progress values advance by `dt * speed`. At high playback
+speeds transitions are skipped (jobs teleport) to avoid visual chaos.
+`Critical` jobs get a shorter transit time — urgency is visible in motion.
 
-Priority also affects motion: a `Critical` warship arrives faster along the
-edge (shorter transit animation), reinforcing urgency in the demo.
-
-#### In the Expanse theme
+#### In the Expanse 2D theme
 
 ```
   ╔══════════════╗          ╔══════════════╗
@@ -665,29 +988,286 @@ edge (shorter transit animation), reinforcing urgency in the demo.
   ║  [Source]    ║  >>>💥  ║  [Worker]    ║
   ╚══════════════╝          ╚══════════════╝
          queue: [🚀🛸💥🛸]  (berth queue, 4 slots)
-         🚀 = MCRN warship (Critical)
-         🛸 = civilian hauler (Normal)
-         💥 = derelict (Low)
+         🚀 = MCRN warship (Critical) — SpriteSheet frame
+         🛸 = civilian hauler (Normal) — SpriteSheet frame
+         💥 = derelict (Low) — SpriteSheet frame
 ```
 
+Background: a wide station-interior image (`ImageBackground`, opacity 0.35).
 Workers show a welding-spark animation while `Busy`; a blinking amber light
 while `AwaitingSignoff`; go dark while `Paused` (bosmang meeting).
 
-### 3D (WebGL) — later phase
+### Rotatable Isometric View — Phase 5 target
 
-WebGL themes use the same `ScenarioConfig` and `SimState`. The render loop
-replaces the SVG `view` function with a `WebGL.toHtml` call. The engine is
-identical.
+The isometric renderer is a **SVG-only upgrade** — no WebGL, no extra
+dependencies. All scene objects get `(x, y, z)` world coordinates. On each
+frame the view applies a rotation matrix and a fixed isometric projection, then
+emits SVG. The engine and `SimState` are entirely unchanged.
 
-A 3D `expanse` theme might show:
-- The station interior as a 3-D mesh
-- Ships flying in along a docking corridor with engine trails
-- Priority shown by hull markings and engine glow colour
-- The bosmang interruption as a station-wide red-alert flash
-- Shopping carts rolling between checkout lanes in the supermarket theme
+#### The camera
 
-Elm has `elm-explorations/webgl` in its ecosystem. The integration point is
-just replacing the `view` function; everything else stays.
+```elm
+type alias Camera =
+    { spinAngle : Float   -- Y-axis rotation, user-controlled (radians, 0..2π)
+    , tiltAngle : Float   -- isometric tilt from horizontal (default: pi/6 ≈ 30°)
+    , scale     : Float   -- pixels per world unit
+    , origin    : ( Float, Float )   -- screen centre
+    }
+
+defaultCamera : Camera
+defaultCamera =
+    { spinAngle = pi / 4   -- classic 45° isometric start angle
+    , tiltAngle = pi / 6   -- 30° tilt
+    , scale     = 48
+    , origin    = ( 600, 300 )
+    }
+```
+
+#### The projection pipeline
+
+Every world point goes through three steps:
+
+```
+world (x, y, z)
+  ──[1. rotateY(spinAngle)]──►  camera-space (x', y', z')
+  ──[2. isometric project]───►  screen (sx, sy)
+  ──[3. painter's sort]──────►  far objects drawn first (occluded by near)
+```
+
+```elm
+project : Camera -> { x : Float, y : Float, z : Float } -> ( Float, Float )
+project cam { x, y, z } =
+    let
+        -- 1. rotate around Y axis
+        xr =  x * cos cam.spinAngle + z * sin cam.spinAngle
+        zr = -x * sin cam.spinAngle + z * cos cam.spinAngle
+
+        -- 2. isometric project (fixed tilt)
+        sx = (xr - zr) * cos cam.tiltAngle * cam.scale
+        sy = (-(xr + zr) * sin cam.tiltAngle + y) * cam.scale
+    in
+    ( cam.origin |> Tuple.first  |> (+) sx
+    , cam.origin |> Tuple.second |> (+) sy
+    )
+```
+
+Depth for painter's sort is `xr + zr` after rotation — the larger this value,
+the further from the viewer, so objects are drawn farthest-first.
+
+#### Scene objects
+
+Everything in the scene is a `SceneObject`:
+
+```elm
+type alias SceneObject msg =
+    { pos     : { x : Float, y : Float, z : Float }
+    , height  : Float          -- vertical extent (used to build box faces)
+    , shape   : SceneShape msg
+    , sortKey : Float          -- depth after rotation; computed each frame
+    }
+
+type SceneShape msg
+    = Box               BoxFaces       -- 3 programmatic faces: top, left, right
+    | FlatTile          { w : Float, d : Float }  -- floor quad (rhombus)
+    | BillboardSprite   SpriteSource   -- always faces camera; projected to screen pos
+    | DirectionalSprite                -- sprite sheet; frame chosen by spinAngle
+        { source       : SpriteSource
+        , directions   : Int           -- how many frames (4 or 8 is standard)
+        }
+    | Path3D            (List { x : Float, y : Float, z : Float })  -- edge connector
+```
+
+A `Box` renders three shaded faces. `BillboardSprite` is projected to a screen
+point and rendered as a flat image always facing the viewer — good for people,
+workers, small decorative objects. `DirectionalSprite` picks a frame from a
+sprite sheet based on the current `spinAngle`, giving the impression the object
+has volume and orientation as the scene rotates (classic isometric-game look).
+
+**When to use each shape:**
+
+| Scene element | Recommended shape |
+|---|---|
+| Nodes (worker bays, stations) | `Box` — programmatic, shading is automatic |
+| Floor tiles | `FlatTile` |
+| Queue slots / platforms | `Box` (low height) |
+| Jobs in transit or in queue | `DirectionalSprite` (8 frames for ships/vehicles) or `BillboardSprite` (tickets, packets) |
+| People / dock workers | `BillboardSprite` |
+| Edge connectors | `Path3D` |
+
+#### Sprites in the isometric view
+
+**`DirectionalSprite` frame selection:**
+
+The sprite sheet has `directions` equally spaced frames (typically 8, covering
+360°). The visible frame index is:
+
+```elm
+directionFrame : Int -> Float -> Int
+directionFrame directions spinAngle =
+    let
+        normalized = modBy directions (round (spinAngle / (2 * pi) * toFloat directions))
+    in
+    normalized
+```
+
+For an 8-direction ship sprite sheet, this picks the frame that shows the ship
+broadside-on, bow-forward, stern-forward, etc. as the camera rotates. The
+sprite sheet URL and clip rects live in `SpriteSource.SpriteSheet`.
+
+**`BillboardSprite`** is simpler: the sprite is always drawn upright at its
+projected screen position, scaled by `cam.scale * job.size`. It can have
+animation frames driven by a per-job timer (e.g. a blinking light, an
+exhaust glow).
+
+#### Background in isometric
+
+The background is a `ParallaxBackground` with two or three layers:
+
+1. **Sky/space layer** (`depth = 0.0`) — a static space or environment image
+   filling the canvas behind everything
+2. **Distant environment** (`depth = 0.2`) — a faint station structure or
+   cityscape that shifts slightly as the camera spins, giving depth
+3. **Floor environment** (`depth = 1.0`) — moves fully with the camera; used
+   for a tiled ground texture that lines up with the `FlatTile` floor objects
+
+As `spinAngle` changes, each layer's `x` offset shifts by `depth * spinAngle *
+parallaxScale`. This gives a convincing sense of a three-dimensional space even
+though everything is still SVG.
+
+#### Scene layout in the scenario JSON
+
+Nodes and queues already have `x` and `y` in the flat 2D layout. The isometric
+scene adds `z` and `h` (height):
+
+```jsonc
+"nodes": [
+  { "id": 2, "label": "Hull welder", "x": 4, "y": 0, "z": 2, "h": 1.5, ... }
+],
+"queues": [
+  { "id": 1, "label": "Berth queue", "x": 2, "y": 0, "z": 2, "h": 0.3, ... }
+]
+```
+
+`y` is the vertical axis (height above floor). Nodes and queues sit on the
+floor (`y = 0`). Jobs animate upward slightly while being processed.
+The `h` field gives the visual box height — taller for important/large nodes.
+
+2D and isometric renderers share the same `x`/`z` layout coordinates.
+The 2D renderer simply ignores `z` and `h`.
+
+#### Job animation in isometric
+
+Jobs are small cubes that move along edges. Their world position is
+interpolated between source and destination during transit. In queue slots they
+are stacked or arranged in a row along the queue's orientation axis. While being
+processed at a worker they hover slightly above the node surface (`y += 0.2`
+with a gentle bob animation).
+
+Priority is expressed visually: `Critical` jobs are larger (`size * 1.2`),
+`Low` jobs are smaller. The theme supplies the top-face colour or sprite.
+
+#### User controls
+
+| Gesture | Effect |
+|---|---|
+| Drag horizontally | Adjust `spinAngle` (rotate around Y axis) |
+| Drag vertically | Adjust `tiltAngle` (zoom from top-down to oblique) |
+| Scroll / pinch | Adjust `scale` |
+| Double-click | Reset camera to `defaultCamera` |
+
+Controls are wired via `Browser.Events.onMouseMove` / `onMouseDown` with a
+`Dragging Bool` flag in the UI model. The camera lives in `Model`, not
+`SimState`, so resetting the simulation never moves the camera.
+
+#### In the Expanse isometric theme
+
+Background: three parallax layers — static deep-space starfield (depth 0.0),
+faint asteroid/station silhouettes (depth 0.2), hex-panel floor texture
+matching the `FlatTile` grid (depth 1.0).
+
+Floor: `FlatTile` shapes with a hex-panel PNG texture, giving the station
+deck a gritty industrial look.
+
+Nodes: `Box` shapes with corrugated-metal shading on side faces; an animated
+welding-spark overlay (SVG filter) while `Busy`; amber beacon while
+`AwaitingSignoff`; dark and silent while `Paused`.
+
+Ships (jobs): `DirectionalSprite` with an 8-direction sprite sheet. Four ship
+types (one per priority), each with 8 angle frames = 32 sprites total per
+sheet. Ships glow faintly while moving, grow dim at low priority, blaze with
+running lights at `Critical`.
+
+Workers / bosmang: `BillboardSprite` with idle / working / gesturing frames.
+
+The bosmang's office is a taller `Box` in the corner of the scene; a red
+rotating beacon activates during a meeting.
+
+#### Relationship to the full WebGL upgrade (Phase 6)
+
+The isometric renderer and the WebGL renderer share the same:
+- Scene layout data (`x, y, z, h` per node/queue in the JSON)
+- `Camera` record (spin, tilt, scale, origin)
+
+Migrating a theme from isometric SVG to WebGL means replacing `SceneShape`
+with 3D mesh objects and the SVG projection with a proper MVP matrix.
+The engine, SimState, and scenario JSON all stay identical.
+
+---
+
+### WebGL 3D — Phase 6
+
+In Phase 6 jobs, nodes, and queues are **real 3D objects** with geometry,
+materials, and lighting — not sprites. The SVG scene graph is replaced with
+a `WebGL.toHtml` call; everything else (engine, SimState, Camera, scenario
+JSON) stays identical.
+
+```elm
+-- A 3D mesh asset
+type alias Mesh3D =
+    { vertices  : List Vec3
+    , normals   : List Vec3
+    , uvCoords  : List Vec2
+    , faces     : List ( Int, Int, Int )   -- triangle indices
+    , material  : Material3D
+    }
+
+type alias Material3D =
+    { albedo    : String        -- URL to diffuse texture (or CSS colour for solid)
+    , normal    : Maybe String  -- normal map URL
+    , roughness : Float         -- 0.0 = mirror, 1.0 = fully diffuse
+    , metalness : Float         -- 0.0 = plastic, 1.0 = metal
+    }
+
+-- Theme3D replaces SceneShape with mesh references
+type alias Theme3D =
+    { background  : Background       -- becomes a skybox or environment map
+    , jobMesh     : Job -> Mesh3D
+    , nodeMesh    : NodeID -> NodeState -> Mesh3D
+    , queueMesh   : QueueID -> QueueState -> Mesh3D
+    , lighting    : List Light3D
+    , vocab       : Vocabulary
+    }
+
+type Light3D
+    = DirectionalLight { direction : Vec3, colour : Vec3, intensity : Float }
+    | AmbientLight     { colour : Vec3, intensity : Float }
+    | PointLight       { position : Vec3, colour : Vec3, range : Float }
+```
+
+`Background` in 3D becomes a **skybox** (six-face cubemap) or an **HDRI
+environment map** that also drives image-based lighting on surfaces.
+
+#### In the Expanse 3D theme
+
+- Ships are low-poly OBJ meshes with diffuse + normal maps; running lights are
+  `PointLight` objects parented to each ship, moving with it
+- Station floor: tiled geometry with a worn-metal PBR material
+- Workers: rigged character meshes with idle/working/gesturing animations
+  (skeletal animation driven by `WorkerActivity` state)
+- The bosmang meeting: a station-wide red-alert point light pulses across all
+  surfaces; workers' meshes switch to a "standing" idle pose
+- Particle systems for welding sparks and thruster exhaust (modelled as
+  `PointLight` + billboard quads, using `elm-explorations/webgl` instanced rendering)
 
 ---
 
@@ -759,6 +1339,9 @@ specification — if it isn't tested it isn't defined.
 | `Engine` | single-step transitions for each event type; Source→Worker→Sink end-to-end; blocking and unblocking; sign-off flow |
 | `Topology` | valid and invalid graphs (disconnected node, missing input queue) |
 | `Lock` | capacity=1 and capacity=N; waiter queue ordering |
+| `Metrics` | utilisation of a known busy/idle sequence; cycle time from a hand-crafted event log; queue length history; scrub to mid-run matches hand-computed state |
+| `ServiceTime` | each variant produces durations in expected range; `size` scaling; LogNormal samples are always positive |
+| `Isometric` | `project` round-trips at known angles; `directionFrame` selects correct frame for 4- and 8-direction sheets; painter sort produces correct depth order for a known set of objects |
 
 Tests use `elm-explorations/test` with `fuzz` tests for priority ordering and
 queue invariants (the queue always stays ≤ capacity; discipline order is
@@ -784,25 +1367,40 @@ Goal: a working, correctly simulating engine with a plain-text / table UI.
 - Playback speed slider / `Time.every` animation loop (Phase 2+)
 - Dispatcher and Boss nodes (Phase 2)
 - JSON scenario loading (Phase 3)
-- SVG visualisation and themed job shapes (Phase 3/4)
+- Flat 2D SVG visualisation and themed job shapes (Phase 3/4)
+- Rotatable isometric view (Phase 5)
+- Full WebGL renderer (Phase 6)
 
-### Phase 2 — Dispatcher and Boss Nodes
+### Phase 2 — Service Time Distributions + Dispatcher and Boss Nodes
 
+- [ ] `ServiceTime` type in `Node.elm` (`Exponential | LogNormal | Erlang | Deterministic | Uniform`)
+- [ ] `size : Float` field on `Job` (default `1.0`); `SourceConfig` specifies per-job-type sizes
+- [ ] Engine `startService` samples from `ServiceTime` and multiplies by `job.size`
+- [ ] Box-Muller transform helper for `LogNormal` sampling
+- [ ] Tests: each `ServiceTime` variant produces durations in the expected range; `size` scaling works
 - [ ] `Dispatcher` node: routing rule (round-robin, shortest-queue, random)
   with configurable dispatch time
 - [ ] `BossNode`: fires `MeetingStarted` / `MeetingEnded` at scheduled times;
   all Workers transition to `Paused`
 - [ ] Metrics updated to exclude paused time from utilisation
 
-### Phase 3 — JSON Scenarios + 2D Visual Renderer
+### Phase 3 — JSON Scenarios + 2D Visual Renderer + Metrics
 
 - [ ] `ScenarioConfig` Elm type + `Json.Decode` pipeline
 - [ ] Scenario loader: bundled via flags and/or `Http.get` from `/scenarios/`
 - [ ] SVG canvas driven by theme: nodes as shapes, queues as labelled connectors
 - [ ] Animated job dots moving along edges during `Playing` mode
 - [ ] `Theme2D` type + default "plain" theme (monochrome, generic labels)
-- [ ] Real-time charts: utilisation bar, queue-length over time, cycle-time histogram
 - [ ] Scenario picker UI (loads a different JSON without recompile)
+- [ ] `Metrics.elm`: `computeMetrics : EventTime -> List Event -> SystemMetrics`
+- [ ] Layer 1 inline indicators: utilisation bar on worker, drop badge on queue
+- [ ] Layer 2 sparklines: busy/idle timeline strip per node, length history per queue
+- [ ] Layer 3 global panel: cycle time histogram, throughput chart, system utilisation
+- [ ] `CompletedRun` snapshots: checkpoint every 100 events during `drainAll`
+- [ ] `Scrubbing` playback mode: time slider, replay to target from nearest snapshot
+- [ ] All metrics and sparklines update live while scrubbing
+- [ ] Transition from `Playing` → `Scrubbing` on simulation end; resume `Playing` from scrub position
+- [ ] `Job.history` field populated: stamp `(EventTime, EventType)` at each stage transition
 
 ### Phase 4 — Themed Scenarios + elm-presentation Bridge
 
@@ -842,19 +1440,51 @@ kind of effect the simulation is meant to make visible.
 
 Theming is purely cosmetic — the engine does not change.
 
-- [ ] `expanse` theme: hex-panel workers, airlock queues, ship-silhouette jobs
-- [ ] `supermarket` theme
-- [ ] `software-team` theme
+- [ ] `SpriteSource` and `Background` types in `Theme.elm`
+- [ ] `expanse` theme (flat 2D): ship sprite sheet (4 priorities × frames), station-interior background image, hex-panel SVG pattern for queue slots
+- [ ] `supermarket` theme (flat 2D): trolley sprite sheet, supermarket background
+- [ ] `software-team` theme (flat 2D): ticket sprites, office background
 - [ ] elm-presentation integration: expose `Des.Scenario` component API,
       wire up `Dict SlideId Model` in the presentation model,
       add `des-scenario` slide kind to elm-presentation JSON schema
+- [ ] Add `z` and `h` layout fields to all scenario JSONs, ready for Phase 5 isometric renderer
 
-### Phase 5 — WebGL / Advanced Visualisation (future)
+### Phase 5 — Rotatable Isometric Renderer
 
-- Animated particles for jobs
-- Heat-map overlay for utilisation
-- 3-D topology view with `elm-explorations/webgl`
-- `expanse` 3D theme: station interior mesh, glowing ship models
+- [ ] `Camera` type and `project` function (Y-axis rotation + isometric projection)
+- [ ] `SceneObject` / `SceneShape` types (`Box`, `FlatTile`, `BillboardSprite`, `DirectionalSprite`, `Path3D`)
+- [ ] Painter's-algorithm depth sort (`sortKey` computed after rotation each frame)
+- [ ] `Box` face rendering: top + left + right faces with shading relative to `spinAngle`
+- [ ] `FlatTile` floor grid with tiled texture (PNG `SpriteSource`)
+- [ ] `BillboardSprite`: always-upright image at projected position; scaled by `cam.scale`
+- [ ] `DirectionalSprite`: frame selection by `spinAngle`; `directionFrame` helper
+- [ ] `ParallaxBackground` for isometric scenes: layer offsets driven by `spinAngle * depth`
+- [ ] Camera drag controls: horizontal drag → `spinAngle`, vertical drag → `tiltAngle`, scroll → `scale`
+- [ ] `z` and `h` fields added to node/queue JSON layout; 2D renderer ignores them
+- [ ] Jobs animate along `Path3D` edges; hover + bob while `Busy`; teleport at high speed
+- [ ] Queue slots arranged along the queue's orientation axis in 3D
+- [ ] `expanse` isometric theme: hex-panel floor tiles, industrial `Box` nodes, 8-direction ship sprite sheet (32 frames), parallax starfield + station background, worker billboard sprites
+- [ ] Camera reset on double-click; camera state in `Model`, never in `SimState`
+
+### Phase 6 — WebGL 3D (future)
+
+Jobs, nodes, and queues become **real 3D objects with geometry and materials**,
+not sprites. The SVG scene graph is replaced with `WebGL.toHtml`
+(`elm-explorations/webgl`). The engine, SimState, Camera, scenario JSON, and
+elm-presentation bridge are all unchanged.
+
+- [ ] `Mesh3D` and `Material3D` types; OBJ/glTF loader or hand-authored meshes
+- [ ] `Theme3D` record: `jobMesh`, `nodeMesh`, `queueMesh`, `lighting`
+- [ ] MVP matrix replacing the SVG `project` call
+- [ ] PBR lighting: directional + ambient + point lights; `roughness` / `metalness`
+- [ ] `Background` becomes a skybox (six-face cubemap) or HDRI environment map
+- [ ] `expanse` 3D theme: low-poly ship meshes with diffuse + normal maps, running-light point lights
+- [ ] Station floor: tiled geometry with worn-metal PBR material
+- [ ] Worker character meshes: idle / working / gesturing poses driven by `WorkerActivity`
+- [ ] Particle system: welding sparks, thruster exhaust (instanced billboard quads)
+- [ ] Red-alert point light pulsing across all surfaces during boss meeting
+- [ ] Heat-map texture on floor (utilisation baked per update into a `WebGL.Texture`)
+- [ ] Free-orbit camera (full pitch + yaw, replacing Y-axis-only spin)
 
 ---
 
