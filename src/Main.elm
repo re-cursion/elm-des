@@ -492,9 +492,30 @@ svgWorkerNode state metrics =
 
         utilW = util * nw
         bodyH = nh - bh
+
+        -- Dot for the current job (top-right corner of body)
+        jobDot =
+            case ns of
+                Busy jid _ ->
+                    case SimState.getJob jid state of
+                        Just job ->
+                            [ Svg.circle
+                                [ SA.cx (String.fromFloat (nx + nw - 11))
+                                , SA.cy (String.fromFloat (ny + 11))
+                                , SA.r "8"
+                                , SA.fill (priorityColor job.priority)
+                                , SA.stroke "#fff"
+                                , SA.strokeWidth "1.5"
+                                ]
+                                []
+                            ]
+                        Nothing ->
+                            []
+                _ ->
+                    []
     in
     Svg.g []
-        [ Svg.rect
+        ([ Svg.rect
             [ SA.x (String.fromFloat nx)
             , SA.y (String.fromFloat ny)
             , SA.width (String.fromFloat nw)
@@ -548,32 +569,80 @@ svgWorkerNode state metrics =
             ]
             [ text (fmtPct util) ]
         ]
+            ++ jobDot
+        )
 
 
 svgQueueNode : Int -> SimState -> Metrics.SystemMetrics -> Float -> Float -> Float -> Float -> Svg.Svg msg
 svgQueueNode qid state metrics qx qy qw qh =
     let
-        mQ = SimState.getQueue (QueueID qid) state
+        mQ   = SimState.getQueue (QueueID qid) state
+        sz   = mQ |> Maybe.map Queue.size     |> Maybe.withDefault 0
+        cap  = mQ |> Maybe.map Queue.capacity |> Maybe.withDefault 1
+        jobs = mQ |> Maybe.map Queue.toList   |> Maybe.withDefault []
 
-        sz  = mQ |> Maybe.map Queue.size     |> Maybe.withDefault 0
-        cap = mQ |> Maybe.map Queue.capacity |> Maybe.withDefault 1
-
-        frac =
-            if cap > 0 then toFloat sz / toFloat cap else 0.0
-
-        fillColor =
-            if frac >= 1.0 then "#d63031" else "#74b9ff"
+        frac      = if cap > 0 then toFloat sz / toFloat cap else 0.0
+        fillColor = if frac >= 1.0 then "#d63031" else "#74b9ff"
 
         drops =
             Dict.get qid metrics.queues
                 |> Maybe.map .dropCount
                 |> Maybe.withDefault 0
 
+        -- Job slot dots (up to 10 shown)
+        displayCap  = min cap 10
+        slotSpacing = qw / toFloat (displayCap + 1)
+        slotR       = min 7.0 (slotSpacing / 2.5)
+        slotY       = qy + qh * 0.62
+
+        slots =
+            List.range 0 (displayCap - 1)
+                |> List.map
+                    (\i ->
+                        let
+                            cx   = qx + slotSpacing * toFloat (i + 1)
+                            mJob = List.drop i jobs |> List.head
+                        in
+                        case mJob of
+                            Just job ->
+                                Svg.circle
+                                    [ SA.cx (String.fromFloat cx)
+                                    , SA.cy (String.fromFloat slotY)
+                                    , SA.r  (String.fromFloat slotR)
+                                    , SA.fill (priorityColor job.priority)
+                                    , SA.stroke "#fff"
+                                    , SA.strokeWidth "1"
+                                    ]
+                                    []
+
+                            Nothing ->
+                                Svg.circle
+                                    [ SA.cx (String.fromFloat cx)
+                                    , SA.cy (String.fromFloat slotY)
+                                    , SA.r  (String.fromFloat slotR)
+                                    , SA.fill "none"
+                                    , SA.stroke "#ccc"
+                                    , SA.strokeWidth "1"
+                                    ]
+                                    []
+                    )
+
         dropBadge =
-            if drops > 0 then " ▼" ++ String.fromInt drops else ""
+            if drops > 0 then
+                [ Svg.text_
+                    [ SA.x (String.fromFloat (qx + qw - 3))
+                    , SA.y (String.fromFloat (qy + 11))
+                    , SA.textAnchor "end"
+                    , SA.fontSize "9"
+                    , SA.fill "#d63031"
+                    ]
+                    [ text ("▼" ++ String.fromInt drops) ]
+                ]
+            else
+                []
     in
     Svg.g []
-        [ Svg.rect
+        ([ Svg.rect
             [ SA.x (String.fromFloat qx)
             , SA.y (String.fromFloat qy)
             , SA.width (String.fromFloat qw)
@@ -584,34 +653,38 @@ svgQueueNode qid state metrics qx qy qw qh =
             , SA.strokeWidth "1"
             ]
             []
-        , Svg.rect
+         , Svg.rect
             [ SA.x (String.fromFloat qx)
             , SA.y (String.fromFloat qy)
             , SA.width (String.fromFloat (frac * qw))
             , SA.height (String.fromFloat qh)
             , SA.rx "4"
             , SA.fill fillColor
-            , SA.opacity "0.55"
+            , SA.opacity "0.18"
             ]
             []
-        , Svg.text_
+         , Svg.text_
             [ SA.x (String.fromFloat (qx + qw / 2))
-            , SA.y (String.fromFloat (qy + qh / 2 - 3))
-            , SA.textAnchor "middle"
-            , SA.fontSize "11"
-            , SA.fontWeight "bold"
-            , SA.fill "#2d3436"
-            ]
-            [ text ("Q" ++ String.fromInt qid) ]
-        , Svg.text_
-            [ SA.x (String.fromFloat (qx + qw / 2))
-            , SA.y (String.fromFloat (qy + qh / 2 + 11))
+            , SA.y (String.fromFloat (qy + 13))
             , SA.textAnchor "middle"
             , SA.fontSize "10"
+            , SA.fontWeight "bold"
             , SA.fill "#636e72"
             ]
-            [ text (String.fromInt sz ++ "/" ++ String.fromInt cap ++ dropBadge) ]
-        ]
+            [ text ("Q" ++ String.fromInt qid) ]
+         ]
+            ++ slots
+            ++ dropBadge
+        )
+
+
+priorityColor : Priority -> String
+priorityColor p =
+    case p of
+        Low      -> "#b2bec3"
+        Normal   -> "#74b9ff"
+        High     -> "#fdcb6e"
+        Critical -> "#d63031"
 
 
 -- ── Live metrics strip ────────────────────────────────────────────────────────
