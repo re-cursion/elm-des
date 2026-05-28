@@ -4,17 +4,18 @@ import Browser
 import Browser.Events
 import Dict
 import Engine
+import Ensemble exposing (EnsembleStats)
 import Event exposing (EventType(..))
 import EventTime exposing (EventTime(..), addTimes, eventTime2Int)
-import Html exposing (Html, button, div, h2, li, p, span, text, ul)
-import Html.Attributes exposing (style)
-import Html.Events exposing (onClick)
+import Html exposing (Html, button, div, h2, h3, input, li, p, span, table, td, text, th, tr, ul)
+import Html.Attributes exposing (style, type_, value)
+import Html.Events exposing (onClick, onInput)
 import Id exposing (NodeID(..), QueueID(..))
 import Job exposing (Priority(..))
 import Node exposing (NodeKind(..), NodeState(..), makeSource, makeSink, makeWorker)
-import ServiceTime exposing (ServiceTime(..))
 import Queue
 import Random
+import ServiceTime exposing (ServiceTime(..))
 import SimState exposing (SimState)
 import Topology exposing (Topology)
 
@@ -83,10 +84,13 @@ speeds =
 -- ── Model ─────────────────────────────────────────────────────────────────────
 
 type alias Model =
-    { topo        : Topology
-    , simState    : SimState
-    , playback    : PlaybackMode
-    , accumulator : Float     -- fractional sim-time units carried between frames
+    { topo             : Topology
+    , simState         : SimState
+    , playback         : PlaybackMode
+    , accumulator      : Float
+    , ensembleReplicas : Int
+    , ensembleDuration : Int
+    , ensembleResult   : Maybe EnsembleStats
     }
 
 
@@ -96,7 +100,14 @@ init _ =
         ( topo, simState ) =
             scenario
     in
-    ( { topo = topo, simState = simState, playback = Stopped, accumulator = 0 }
+    ( { topo             = topo
+      , simState         = simState
+      , playback         = Stopped
+      , accumulator      = 0
+      , ensembleReplicas = 100
+      , ensembleDuration = 1000
+      , ensembleResult   = Nothing
+      }
     , Cmd.none
     )
 
@@ -109,6 +120,9 @@ type Msg
     | Reset
     | SetPlayback PlaybackMode
     | Tick
+    | SetReplicas String
+    | SetDuration String
+    | RunEnsemble
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -135,14 +149,17 @@ update msg model =
                 ( topo, simState ) =
                     scenario
             in
-            ( { model | topo = topo, simState = simState, playback = Stopped, accumulator = 0 }
+            ( { model
+                | topo        = topo
+                , simState    = simState
+                , playback    = Stopped
+                , accumulator = 0
+              }
             , Cmd.none
             )
 
         SetPlayback mode ->
-            ( { model | playback = mode, accumulator = 0 }
-            , Cmd.none
-            )
+            ( { model | playback = mode, accumulator = 0 }, Cmd.none )
 
         Tick ->
             case model.playback of
@@ -179,6 +196,31 @@ update msg model =
                         , Cmd.none
                         )
 
+        SetReplicas s ->
+            case String.toInt s of
+                Just n -> ( { model | ensembleReplicas = max 1 n }, Cmd.none )
+                Nothing -> ( model, Cmd.none )
+
+        SetDuration s ->
+            case String.toInt s of
+                Just n -> ( { model | ensembleDuration = max 1 n }, Cmd.none )
+                Nothing -> ( model, Cmd.none )
+
+        RunEnsemble ->
+            let
+                ( topo, initState ) =
+                    scenario
+
+                result =
+                    Ensemble.run
+                        { replicas = model.ensembleReplicas
+                        , duration = model.ensembleDuration
+                        }
+                        topo
+                        initState
+            in
+            ( { model | ensembleResult = Just result, playback = Stopped }, Cmd.none )
+
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
@@ -201,6 +243,7 @@ view model =
         , viewQueues model.simState
         , viewNodes model.simState
         , viewEventLog model.simState
+        , viewEnsemblePanel model
         ]
 
 
@@ -209,9 +252,9 @@ viewPlaybackControls current =
     div [ style "margin-bottom" "1rem" ]
         (List.map (speedBtn current) speeds
             ++ [ separator
-               , btn Step    "Step"
+               , btn Step     "Step"
                , btn RunToEnd "Run to end"
-               , btn Reset   "Reset"
+               , btn Reset    "Reset"
                ]
         )
 
@@ -397,6 +440,120 @@ describeEvent kind =
 
         MeetingEnded ->
             "MeetingEnded"
+
+
+-- ── Ensemble panel ────────────────────────────────────────────────────────────
+
+viewEnsemblePanel : Model -> Html Msg
+viewEnsemblePanel model =
+    div [ style "margin-top" "2rem", style "border-top" "1px solid #ccc", style "padding-top" "1rem" ]
+        [ h2 [] [ text "Ensemble / Monte Carlo" ]
+        , div [ style "margin-bottom" "0.75rem" ]
+            [ labelledInput "Replicas" (String.fromInt model.ensembleReplicas) SetReplicas
+            , labelledInput "Duration (ticks)" (String.fromInt model.ensembleDuration) SetDuration
+            , btn RunEnsemble ("Run " ++ String.fromInt model.ensembleReplicas ++ " replicas")
+            ]
+        , case model.ensembleResult of
+            Nothing ->
+                p [ style "color" "#888" ] [ text "No ensemble run yet." ]
+
+            Just stats ->
+                viewEnsembleStats stats
+        ]
+
+
+labelledInput : String -> String -> (String -> Msg) -> Html Msg
+labelledInput label val toMsg =
+    span [ style "margin-right" "1rem" ]
+        [ span [ style "margin-right" "0.25rem" ] [ text (label ++ ":") ]
+        , input
+            [ type_ "number"
+            , value val
+            , onInput toMsg
+            , style "width" "5rem"
+            , style "font-family" "monospace"
+            ]
+            []
+        ]
+
+
+viewEnsembleStats : EnsembleStats -> Html msg
+viewEnsembleStats stats =
+    div []
+        [ p [] [ text (String.fromInt stats.n ++ " replicas × " ++ String.fromInt stats.duration ++ " ticks each") ]
+        , h3 [] [ text "System" ]
+        , distTable
+            [ ( "Throughput (jobs/tick)", stats.throughput )
+            , ( "Avg cycle time (ticks)", stats.avgCycleTime )
+            , ( "p95 cycle time (ticks)", stats.p95CycleTime )
+            ]
+        , h3 [] [ text "Worker utilisation" ]
+        , distTable
+            (stats.utilisation
+                |> Dict.toList
+                |> List.map (\( nid, d ) -> ( "Node " ++ String.fromInt nid, d ))
+            )
+        , h3 [] [ text "Queue avg length" ]
+        , distTable
+            (stats.avgQueueLen
+                |> Dict.toList
+                |> List.map (\( qid, d ) -> ( "Q" ++ String.fromInt qid, d ))
+            )
+        , h3 [] [ text "Queue drop count" ]
+        , distTable
+            (stats.dropCount
+                |> Dict.toList
+                |> List.map (\( qid, d ) -> ( "Q" ++ String.fromInt qid, d ))
+            )
+        ]
+
+
+distTable : List ( String, Ensemble.Distribution ) -> Html msg
+distTable rows =
+    table
+        [ style "border-collapse" "collapse"
+        , style "margin-bottom" "1rem"
+        , style "font-size" "0.9em"
+        ]
+        (tableHeader :: List.map distRow rows)
+
+
+tableHeader : Html msg
+tableHeader =
+    tr []
+        [ th [ cellStyle, style "text-align" "left" ] [ text "Metric" ]
+        , th [ cellStyle ] [ text "mean" ]
+        , th [ cellStyle ] [ text "std dev" ]
+        , th [ cellStyle ] [ text "p05" ]
+        , th [ cellStyle ] [ text "p50" ]
+        , th [ cellStyle ] [ text "p95" ]
+        , th [ cellStyle ] [ text "min" ]
+        , th [ cellStyle ] [ text "max" ]
+        ]
+
+
+distRow : ( String, Ensemble.Distribution ) -> Html msg
+distRow ( label, d ) =
+    tr []
+        [ td [ cellStyle, style "text-align" "left" ] [ text label ]
+        , td [ cellStyle ] [ text (fmt d.mean) ]
+        , td [ cellStyle ] [ text (fmt d.stdDev) ]
+        , td [ cellStyle ] [ text (fmt d.p05) ]
+        , td [ cellStyle ] [ text (fmt d.p50) ]
+        , td [ cellStyle ] [ text (fmt d.p95) ]
+        , td [ cellStyle ] [ text (fmt d.min) ]
+        , td [ cellStyle ] [ text (fmt d.max) ]
+        ]
+
+
+cellStyle : Html.Attribute msg
+cellStyle =
+    style "padding" "0.2rem 0.6rem"
+
+
+fmt : Float -> String
+fmt f =
+    String.fromFloat (toFloat (round (f * 100)) / 100)
 
 
 -- ── Entry point ───────────────────────────────────────────────────────────────

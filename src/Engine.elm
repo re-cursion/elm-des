@@ -2,6 +2,7 @@ module Engine exposing
     ( processNextEvent
     , advanceUntil
     , drainAll
+    , drainBounded
     )
 
 import Event exposing (Event, EventType(..), event)
@@ -42,13 +43,23 @@ advanceUntil deadline topo state =
                 advanceUntil deadline topo (processNextEvent topo state)
 
 
+-- Drain at most maxEvents events (prevents infinite loops when Source nodes
+-- keep scheduling new arrivals).
 drainAll : Topology -> SimState -> SimState
-drainAll topo state =
-    case state.eventQueue of
-        [] ->
-            state
-        _ ->
-            drainAll topo (processNextEvent topo state)
+drainAll =
+    drainBounded 100000
+
+
+drainBounded : Int -> Topology -> SimState -> SimState
+drainBounded maxEvents topo state =
+    if maxEvents <= 0 then
+        state
+    else
+        case state.eventQueue of
+            [] ->
+                state
+            _ ->
+                drainBounded (maxEvents - 1) topo (processNextEvent topo state)
 
 
 -- ── Dispatch ──────────────────────────────────────────────────────────────────

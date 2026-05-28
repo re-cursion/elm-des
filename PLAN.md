@@ -639,6 +639,70 @@ drop to zero in real time.
 
 ---
 
+## Ensemble / Monte Carlo Runner
+
+A single simulation run is one stochastic sample. To get reliable estimates of
+steady-state behaviour — and to quantify uncertainty — you run N independent
+replicas of the same scenario and aggregate their outputs into distributions.
+
+### What it does
+
+`Ensemble.run { replicas : Int, duration : Int } topo initState` runs N replicas,
+each for `duration` simulated ticks, each with a distinct random seed derived from
+the base seed in `initState`. It then aggregates `Metrics.SystemMetrics` from each
+replica into `EnsembleStats`, where every numeric outcome is a `Distribution`:
+
+```elm
+type alias Distribution =
+    { mean   : Float
+    , stdDev : Float
+    , min    : Float
+    , p05    : Float
+    , p50    : Float   -- median
+    , p95    : Float
+    , max    : Float
+    }
+
+type alias EnsembleStats =
+    { n            : Int
+    , duration     : Int
+    , throughput   : Distribution
+    , avgCycleTime : Distribution
+    , p95CycleTime : Distribution
+    , utilisation  : Dict Int Distribution   -- by NodeID
+    , avgQueueLen  : Dict Int Distribution   -- by QueueID
+    , dropCount    : Dict Int Distribution   -- by QueueID
+    }
+```
+
+### Seed generation
+
+Each replica gets an independent seed by advancing the base seed once per replica:
+
+```elm
+generateSeeds : Int -> Random.Seed -> List Random.Seed
+```
+
+This keeps runs fully reproducible from the initial seed.
+
+### UI integration
+
+The main view has an "Ensemble / Monte Carlo" panel with:
+- Replica count input (default 100)
+- Duration input (default 1 000 ticks)
+- "Run N replicas" button → `RunEnsemble` message
+- Stats tables rendered as `distTable` rows (mean, stdDev, p05, p50, p95, min, max)
+
+### Typical use
+
+- **Capacity planning**: vary queue capacity or worker count, compare p95 cycle time
+- **Sensitivity analysis**: change `arrivalRate` or `serviceTime` parameters, observe
+  how distributions shift and widen
+- **Bottleneck detection**: look for nodes with utilisation distributions near 1.0 — those
+  are the constraints
+
+---
+
 ## Data Model (Proposed)
 
 ```elm
@@ -1371,18 +1435,25 @@ Goal: a working, correctly simulating engine with a plain-text / table UI.
 - Rotatable isometric view (Phase 5)
 - Full WebGL renderer (Phase 6)
 
-### Phase 2 — Service Time Distributions + Dispatcher and Boss Nodes
+### Phase 2 — Service Time Distributions + Metrics + Ensemble Runner ✅ done
 
-- [ ] `ServiceTime` type in `Node.elm` (`Exponential | LogNormal | Erlang | Deterministic | Uniform`)
-- [ ] `size : Float` field on `Job` (default `1.0`); `SourceConfig` specifies per-job-type sizes
-- [ ] Engine `startService` samples from `ServiceTime` and multiplies by `job.size`
-- [ ] Box-Muller transform helper for `LogNormal` sampling
-- [ ] Tests: each `ServiceTime` variant produces durations in the expected range; `size` scaling works
+- [x] `ServiceTime.elm` — `Exponential | LogNormal | Erlang | Deterministic | Uniform`
+- [x] `size : Float` field on `Job` (default `1.0`); scales actual service duration
+- [x] Engine `startService` samples from `ServiceTime` and multiplies by `job.size`
+- [x] Box-Muller transform helper for `LogNormal` sampling
+- [x] `drainAll` bounded to 100 000 events (Source nodes create infinite event chains)
+- [x] Animated playback via `Browser.Events.onAnimationFrame`; speed buttons ×1…Max
+- [x] `Metrics.elm` — single-pass event-log scan → `SystemMetrics` (throughput, cycle times,
+      utilisation, queue avg length, drop count)
+- [x] `Ensemble.elm` — `run N replicas` → `EnsembleStats` with `Distribution` per metric
+      (mean, stdDev, p05, p50, p95, min, max)
+- [x] Ensemble UI panel in `Main.elm`: replica count + duration inputs, results tables
+- [x] 65 tests passing: TestQueue, TestJob, TestEngine, TestServiceTime, TestMetrics, TestEnsemble
+
+**Remaining Phase 2 items (deferred):**
 - [ ] `Dispatcher` node: routing rule (round-robin, shortest-queue, random)
-  with configurable dispatch time
-- [ ] `BossNode`: fires `MeetingStarted` / `MeetingEnded` at scheduled times;
-  all Workers transition to `Paused`
-- [ ] Metrics updated to exclude paused time from utilisation
+- [ ] `BossNode`: fires `MeetingStarted` / `MeetingEnded`; Workers → `Paused`
+- [ ] Metrics: exclude paused time from utilisation
 
 ### Phase 3 — JSON Scenarios + 2D Visual Renderer + Metrics
 
