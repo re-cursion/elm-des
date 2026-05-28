@@ -8,7 +8,7 @@ import Ensemble exposing (EnsembleStats)
 import Event exposing (EventType(..))
 import EventTime exposing (EventTime(..), addTimes, eventTime2Int)
 import Html exposing (Html, button, div, h2, h3, input, li, p, span, table, td, text, th, tr, ul)
-import Html.Attributes exposing (style, type_, value)
+import Html.Attributes as HA exposing (style, type_, value)
 import Html.Events exposing (onClick, onInput)
 import Id exposing (NodeID(..), QueueID(..))
 import Job exposing (Priority(..))
@@ -91,6 +91,7 @@ type alias Model =
     , simState         : SimState
     , playback         : PlaybackMode
     , accumulator      : Float
+    , checkpoints      : List SimState    -- oldest-first; populated by RunToEnd
     , ensembleReplicas : Int
     , ensembleDuration : Int
     , ensembleResult   : Maybe EnsembleStats
@@ -107,6 +108,7 @@ init _ =
       , simState         = simState
       , playback         = Stopped
       , accumulator      = 0
+      , checkpoints      = []
       , ensembleReplicas = 100
       , ensembleDuration = 1000
       , ensembleResult   = Nothing
@@ -123,6 +125,7 @@ type Msg
     | Reset
     | SetPlayback PlaybackMode
     | Tick
+    | ScrubTo String
     | SetReplicas String
     | SetDuration String
     | RunEnsemble
@@ -140,9 +143,14 @@ update msg model =
             )
 
         RunToEnd ->
+            let
+                ( finalState, cps ) =
+                    buildCheckpoints model.topo model.simState
+            in
             ( { model
-                | simState = Engine.drainAll model.topo model.simState
-                , playback = Stopped
+                | simState    = finalState
+                , checkpoints = cps
+                , playback    = Stopped
               }
             , Cmd.none
             )
@@ -155,11 +163,31 @@ update msg model =
             ( { model
                 | topo        = topo
                 , simState    = simState
+                , checkpoints = []
                 , playback    = Stopped
                 , accumulator = 0
               }
             , Cmd.none
             )
+
+        ScrubTo s ->
+            case String.toInt s of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just t ->
+                    let
+                        nearest =
+                            model.checkpoints
+                                |> List.filter (\cp -> eventTime2Int cp.clock <= t)
+                                |> List.reverse
+                                |> List.head
+                                |> Maybe.withDefault model.simState
+
+                        newState =
+                            Engine.advanceUntil (EventTime t) model.topo nearest
+                    in
+                    ( { model | simState = newState, playback = Stopped }, Cmd.none )
 
         SetPlayback mode ->
             ( { model | playback = mode, accumulator = 0 }, Cmd.none )
@@ -225,6 +253,30 @@ update msg model =
             ( { model | ensembleResult = Just result, playback = Stopped }, Cmd.none )
 
 
+-- Save a checkpoint every 100 events while draining up to 100 000 events.
+buildCheckpoints : Topology -> SimState -> ( SimState, List SimState )
+buildCheckpoints topo initState =
+    let
+        go n state cps =
+            if n >= 100000 then
+                ( state, List.reverse cps )
+            else
+                case state.eventQueue of
+                    [] ->
+                        ( state, List.reverse cps )
+
+                    _ ->
+                        let
+                            s1 = Engine.processNextEvent topo state
+                            newCps =
+                                if modBy 100 (n + 1) == 0 then s1 :: cps
+                                else cps
+                        in
+                        go (n + 1) s1 newCps
+    in
+    go 0 initState [ initState ]
+
+
 subscriptions : Model -> Sub Msg
 subscriptions model =
     case model.playback of
@@ -244,6 +296,7 @@ view model =
         , viewPlaybackControls model.playback
         , viewClock model.simState
         , viewCanvas model.simState
+        , viewScrubber model
         , viewLiveMetrics model.simState
         , viewEventLog model.simState
         , viewEnsemblePanel model
@@ -597,6 +650,44 @@ metricCell label val =
 fmtPct : Float -> String
 fmtPct f =
     String.fromInt (round (f * 100)) ++ "%"
+
+
+-- ── Time-travel scrubber ──────────────────────────────────────────────────────
+
+viewScrubber : Model -> Html Msg
+viewScrubber model =
+    case model.checkpoints of
+        [] ->
+            p [ style "color" "#aaa", style "font-size" "0.8em", style "margin" "0.25rem 0 0.75rem" ]
+                [ text "Run to end to enable time-travel scrubbing." ]
+
+        _ ->
+            let
+                maxTick =
+                    model.checkpoints
+                        |> List.reverse
+                        |> List.head
+                        |> Maybe.map (\cp -> eventTime2Int cp.clock)
+                        |> Maybe.withDefault 0
+
+                currentTick =
+                    eventTime2Int model.simState.clock
+            in
+            div [ style "margin-bottom" "0.75rem" ]
+                [ div [ style "font-size" "0.8em", style "color" "#636e72", style "margin-bottom" "0.2rem" ]
+                    [ text ("t = " ++ String.fromInt currentTick ++ " / " ++ String.fromInt maxTick) ]
+                , input
+                    [ type_ "range"
+                    , HA.min "0"
+                    , HA.max (String.fromInt maxTick)
+                    , value (String.fromInt currentTick)
+                    , onInput ScrubTo
+                    , style "width" "760px"
+                    , style "display" "block"
+                    , style "cursor" "pointer"
+                    ]
+                    []
+                ]
 
 
 viewEventLog : SimState -> Html msg
