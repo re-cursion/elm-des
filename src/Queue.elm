@@ -8,6 +8,7 @@ module Queue exposing
     , dequeue
     , peek
     , size
+    , capacity
     , isEmpty
     , toList
     )
@@ -55,6 +56,11 @@ empty cfg =
 size : Queue -> Int
 size (Queue _ jobs) =
     List.length jobs
+
+
+capacity : Queue -> Int
+capacity (Queue cfg _) =
+    cfg.capacity
 
 
 isEmpty : Queue -> Bool

@@ -12,11 +12,14 @@ import Html.Attributes exposing (style, type_, value)
 import Html.Events exposing (onClick, onInput)
 import Id exposing (NodeID(..), QueueID(..))
 import Job exposing (Priority(..))
+import Metrics
 import Node exposing (NodeKind(..), NodeState(..), makeSource, makeSink, makeWorker)
 import Queue
 import Random
 import ServiceTime exposing (ServiceTime(..))
 import SimState exposing (SimState)
+import Svg
+import Svg.Attributes as SA
 import Topology exposing (Topology)
 
 
@@ -240,8 +243,8 @@ view model =
         [ h2 [] [ text "elm-des — Discrete Event Simulation" ]
         , viewPlaybackControls model.playback
         , viewClock model.simState
-        , viewQueues model.simState
-        , viewNodes model.simState
+        , viewCanvas model.simState
+        , viewLiveMetrics model.simState
         , viewEventLog model.simState
         , viewEnsemblePanel model
         ]
@@ -305,76 +308,295 @@ viewClock state =
     p [] [ text ("Clock: " ++ String.fromInt (eventTime2Int state.clock)) ]
 
 
-viewQueues : SimState -> Html msg
-viewQueues state =
-    div []
-        [ h2 [] [ text "Queues" ]
-        , ul [] (Dict.toList state.queues |> List.map viewQueue)
-        ]
+-- ── 2D SVG Canvas ─────────────────────────────────────────────────────────────
+-- Hardcoded layout: Source(1) → [Q1] → Worker(2) → [Q2] → Sink(3)
+-- Canvas 760 × 220.  All coords in SVG user units.
 
-
-viewQueue : ( Int, Queue.Queue ) -> Html msg
-viewQueue ( qid, queue ) =
+viewCanvas : SimState -> Html msg
+viewCanvas state =
     let
-        jobs =
-            Queue.toList queue
-
-        jobLabels =
-            if List.isEmpty jobs then
-                "(empty)"
-            else
-                jobs
-                    |> List.map (\j -> j.label ++ "#" ++ String.fromInt (Id.jobIDInt j.id))
-                    |> String.join ", "
+        metrics =
+            Metrics.compute state
     in
-    li []
-        [ text
-            ("Q"
-                ++ String.fromInt qid
-                ++ " ["
-                ++ String.fromInt (Queue.size queue)
-                ++ "]: "
-                ++ jobLabels
-            )
+    div [ style "margin-bottom" "1rem" ]
+        [ Svg.svg
+            [ SA.viewBox "0 0 760 220"
+            , SA.width "760"
+            , SA.height "220"
+            , style "border" "1px solid #ccc"
+            , style "border-radius" "4px"
+            , style "background" "#f8f9fa"
+            , style "display" "block"
+            ]
+            [ svgDefs
+            , svgEdge 91 110 108 110
+            , svgEdge 268 110 285 110
+            , svgEdge 415 110 432 110
+            , svgEdge 592 110 609 110
+            , svgQueueNode 1 state metrics 108 86 160 48
+            , svgQueueNode 2 state metrics 432 86 160 48
+            , svgCircleNode 1 "Source" "#74b9ff" "#0984e3" state 65 110 26
+            , svgWorkerNode state metrics
+            , svgCircleNode 3 "Sink"   "#55efc4" "#00b894" state 635 110 26
+            ]
         ]
 
 
-viewNodes : SimState -> Html msg
-viewNodes state =
-    div []
-        [ h2 [] [ text "Nodes" ]
-        , ul [] (Dict.toList state.nodes |> List.map viewNode)
+svgDefs : Svg.Svg msg
+svgDefs =
+    Svg.defs []
+        [ Svg.marker
+            [ SA.id "arr"
+            , SA.markerWidth "8"
+            , SA.markerHeight "8"
+            , SA.refX "7"
+            , SA.refY "3"
+            , SA.orient "auto"
+            ]
+            [ Svg.path [ SA.d "M0,0 L0,6 L8,3 z", SA.fill "#888" ] [] ]
         ]
 
 
-viewNode : ( Int, Node.NodeData ) -> Html msg
-viewNode ( nid, node ) =
+svgEdge : Float -> Float -> Float -> Float -> Svg.Svg msg
+svgEdge x1 y1 x2 y2 =
+    Svg.line
+        [ SA.x1 (String.fromFloat x1)
+        , SA.y1 (String.fromFloat y1)
+        , SA.x2 (String.fromFloat x2)
+        , SA.y2 (String.fromFloat y2)
+        , SA.stroke "#888"
+        , SA.strokeWidth "2"
+        , SA.markerEnd "url(#arr)"
+        ]
+        []
+
+
+svgCircleNode : Int -> String -> String -> String -> SimState -> Float -> Float -> Float -> Svg.Svg msg
+svgCircleNode nid fallbackLabel fill stroke state cx cy r =
     let
+        lbl =
+            SimState.getNode (NodeID nid) state
+                |> Maybe.map .label
+                |> Maybe.withDefault fallbackLabel
+    in
+    Svg.g []
+        [ Svg.circle
+            [ SA.cx (String.fromFloat cx)
+            , SA.cy (String.fromFloat cy)
+            , SA.r  (String.fromFloat r)
+            , SA.fill fill
+            , SA.stroke stroke
+            , SA.strokeWidth "2"
+            ]
+            []
+        , Svg.text_
+            [ SA.x (String.fromFloat cx)
+            , SA.y (String.fromFloat (cy + 5))
+            , SA.textAnchor "middle"
+            , SA.fontSize "11"
+            , SA.fill "#2d3436"
+            ]
+            [ text lbl ]
+        ]
+
+
+svgWorkerNode : SimState -> Metrics.SystemMetrics -> Svg.Svg msg
+svgWorkerNode state metrics =
+    let
+        nx  = 285
+        ny  = 76
+        nw  = 130
+        nh  = 68
+        bh  = 10   -- utilisation bar height at bottom
+
+        mNode = SimState.getNode (NodeID 2) state
+        lbl   = mNode |> Maybe.map .label |> Maybe.withDefault "Worker"
+        ns    = mNode |> Maybe.map .state |> Maybe.withDefault Idle
+
+        bodyColor =
+            case ns of
+                Idle          -> "#dfe6e9"
+                Busy _ _      -> "#fdcb6e"
+                Blocked _     -> "#d63031"
+                Signoff _ _   -> "#a29bfe"
+                Preempted _ _ -> "#fd79a8"
+                Paused _      -> "#b2bec3"
+
         stateStr =
-            case node.state of
-                Idle ->
-                    "idle"
+            case ns of
+                Idle          -> "idle"
+                Busy _ _      -> "busy"
+                Blocked _     -> "blocked"
+                Signoff _ _   -> "signoff"
+                Preempted _ _ -> "preempted"
+                Paused _      -> "paused"
 
-                Busy jid (EventTime t) ->
-                    "busy (job #"
-                        ++ String.fromInt (Id.jobIDInt jid)
-                        ++ ", done @"
-                        ++ String.fromInt t
-                        ++ ")"
+        util =
+            Dict.get 2 metrics.nodes
+                |> Maybe.map .utilisation
+                |> Maybe.withDefault 0.0
 
-                Blocked jid ->
-                    "blocked (job #" ++ String.fromInt (Id.jobIDInt jid) ++ ")"
-
-                Signoff jid _ ->
-                    "awaiting signoff (job #" ++ String.fromInt (Id.jobIDInt jid) ++ ")"
-
-                Preempted jid _ ->
-                    "preempted (job #" ++ String.fromInt (Id.jobIDInt jid) ++ ")"
-
-                Paused _ ->
-                    "paused"
+        utilW = util * nw
+        bodyH = nh - bh
     in
-    li [] [ text (node.label ++ " (N" ++ String.fromInt nid ++ "): " ++ stateStr) ]
+    Svg.g []
+        [ Svg.rect
+            [ SA.x (String.fromFloat nx)
+            , SA.y (String.fromFloat ny)
+            , SA.width (String.fromFloat nw)
+            , SA.height (String.fromFloat bodyH)
+            , SA.rx "5"
+            , SA.fill bodyColor
+            , SA.stroke "#636e72"
+            , SA.strokeWidth "1.5"
+            ]
+            []
+        , Svg.rect
+            [ SA.x (String.fromFloat nx)
+            , SA.y (String.fromFloat (ny + bodyH))
+            , SA.width (String.fromFloat nw)
+            , SA.height (String.fromFloat bh)
+            , SA.rx "5"
+            , SA.fill "#b2bec3"
+            ]
+            []
+        , Svg.rect
+            [ SA.x (String.fromFloat nx)
+            , SA.y (String.fromFloat (ny + bodyH))
+            , SA.width (String.fromFloat utilW)
+            , SA.height (String.fromFloat bh)
+            , SA.fill "#00b894"
+            ]
+            []
+        , Svg.text_
+            [ SA.x (String.fromFloat (nx + nw / 2))
+            , SA.y (String.fromFloat (ny + bodyH / 2 - 4))
+            , SA.textAnchor "middle"
+            , SA.fontSize "12"
+            , SA.fontWeight "bold"
+            , SA.fill "#2d3436"
+            ]
+            [ text lbl ]
+        , Svg.text_
+            [ SA.x (String.fromFloat (nx + nw / 2))
+            , SA.y (String.fromFloat (ny + bodyH / 2 + 10))
+            , SA.textAnchor "middle"
+            , SA.fontSize "10"
+            , SA.fill "#636e72"
+            ]
+            [ text stateStr ]
+        , Svg.text_
+            [ SA.x (String.fromFloat (nx + nw / 2))
+            , SA.y (String.fromFloat (ny + nh + 14))
+            , SA.textAnchor "middle"
+            , SA.fontSize "10"
+            , SA.fill "#00b894"
+            ]
+            [ text (fmtPct util) ]
+        ]
+
+
+svgQueueNode : Int -> SimState -> Metrics.SystemMetrics -> Float -> Float -> Float -> Float -> Svg.Svg msg
+svgQueueNode qid state metrics qx qy qw qh =
+    let
+        mQ = SimState.getQueue (QueueID qid) state
+
+        sz  = mQ |> Maybe.map Queue.size     |> Maybe.withDefault 0
+        cap = mQ |> Maybe.map Queue.capacity |> Maybe.withDefault 1
+
+        frac =
+            if cap > 0 then toFloat sz / toFloat cap else 0.0
+
+        fillColor =
+            if frac >= 1.0 then "#d63031" else "#74b9ff"
+
+        drops =
+            Dict.get qid metrics.queues
+                |> Maybe.map .dropCount
+                |> Maybe.withDefault 0
+
+        dropBadge =
+            if drops > 0 then " ▼" ++ String.fromInt drops else ""
+    in
+    Svg.g []
+        [ Svg.rect
+            [ SA.x (String.fromFloat qx)
+            , SA.y (String.fromFloat qy)
+            , SA.width (String.fromFloat qw)
+            , SA.height (String.fromFloat qh)
+            , SA.rx "4"
+            , SA.fill "#dfe6e9"
+            , SA.stroke "#b2bec3"
+            , SA.strokeWidth "1"
+            ]
+            []
+        , Svg.rect
+            [ SA.x (String.fromFloat qx)
+            , SA.y (String.fromFloat qy)
+            , SA.width (String.fromFloat (frac * qw))
+            , SA.height (String.fromFloat qh)
+            , SA.rx "4"
+            , SA.fill fillColor
+            , SA.opacity "0.55"
+            ]
+            []
+        , Svg.text_
+            [ SA.x (String.fromFloat (qx + qw / 2))
+            , SA.y (String.fromFloat (qy + qh / 2 - 3))
+            , SA.textAnchor "middle"
+            , SA.fontSize "11"
+            , SA.fontWeight "bold"
+            , SA.fill "#2d3436"
+            ]
+            [ text ("Q" ++ String.fromInt qid) ]
+        , Svg.text_
+            [ SA.x (String.fromFloat (qx + qw / 2))
+            , SA.y (String.fromFloat (qy + qh / 2 + 11))
+            , SA.textAnchor "middle"
+            , SA.fontSize "10"
+            , SA.fill "#636e72"
+            ]
+            [ text (String.fromInt sz ++ "/" ++ String.fromInt cap ++ dropBadge) ]
+        ]
+
+
+-- ── Live metrics strip ────────────────────────────────────────────────────────
+
+viewLiveMetrics : SimState -> Html msg
+viewLiveMetrics state =
+    let
+        m = Metrics.compute state
+        n = List.length m.cycleTimes
+        workerUtil =
+            Dict.get 2 m.nodes |> Maybe.map .utilisation |> Maybe.withDefault 0.0
+    in
+    div
+        [ style "display" "flex"
+        , style "gap" "2rem"
+        , style "padding" "0.4rem 0"
+        , style "font-size" "0.85em"
+        , style "border-bottom" "1px solid #eee"
+        , style "margin-bottom" "1rem"
+        ]
+        [ metricCell "Throughput"  (fmt m.throughput ++ " /tick")
+        , metricCell "Avg cycle"   (fmt m.avgCycleTime ++ " ticks")
+        , metricCell "p95 cycle"   (fmt m.p95CycleTime ++ " ticks")
+        , metricCell "Worker util" (fmtPct workerUtil)
+        , metricCell "Completed"   (String.fromInt n ++ " jobs")
+        ]
+
+
+metricCell : String -> String -> Html msg
+metricCell label val =
+    div []
+        [ div [ style "color" "#888", style "font-size" "0.8em" ] [ text label ]
+        , div [ style "font-weight" "bold" ] [ text val ]
+        ]
+
+
+fmtPct : Float -> String
+fmtPct f =
+    String.fromInt (round (f * 100)) ++ "%"
 
 
 viewEventLog : SimState -> Html msg
