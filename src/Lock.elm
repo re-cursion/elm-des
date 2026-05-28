@@ -8,13 +8,14 @@ module Lock exposing
     )
 
 import Id exposing (JobID, LockID, NodeID)
+import ServiceTime exposing (ServiceTime)
 
 
 type alias LockConfig =
     { id          : LockID
     , label       : String
     , capacity    : Int
-    , serviceRate : Float     -- mean approvals per time unit
+    , serviceTime : ServiceTime
     }
 
 

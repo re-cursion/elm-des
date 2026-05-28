@@ -12,6 +12,7 @@ import Html.Events exposing (onClick)
 import Id exposing (NodeID(..), QueueID(..))
 import Job exposing (Priority(..))
 import Node exposing (NodeKind(..), NodeState(..), makeSource, makeSink, makeWorker)
+import ServiceTime exposing (ServiceTime(..))
 import Queue
 import Random
 import SimState exposing (SimState)
@@ -35,7 +36,7 @@ scenario =
             { arrivalRate = 0.3, jobPriority = Normal, jobLabel = "Job" }
 
         workerCfg =
-            { serviceRate = 0.5, preemptive = False, signoff = Nothing }
+            { serviceTime = LogNormal 1.2 0.4, preemptive = False, signoff = Nothing }
 
         q =
             Queue.empty { capacity = 5, discipline = Queue.FIFO, overflow = Queue.Block }

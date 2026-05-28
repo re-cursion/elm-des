@@ -10,6 +10,7 @@ import Job exposing (Priority(..))
 import Node exposing (NodeState(..), makeSource, makeSink, makeWorker)
 import Queue
 import Random
+import ServiceTime exposing (ServiceTime(..))
 import SimState exposing (SimState)
 import Test exposing (Test, describe, test)
 import Topology exposing (Topology)
@@ -32,7 +33,7 @@ threeNodeScenario =
             { arrivalRate = 1.0, jobPriority = Normal, jobLabel = "job" }
 
         workerCfg =
-            { serviceRate = 1.0, preemptive = False, signoff = Nothing }
+            { serviceTime = Exponential 1.0, preemptive = False, signoff = Nothing }
 
         mkQ =
             Queue.empty { capacity = 5, discipline = Queue.FIFO, overflow = Queue.Block }

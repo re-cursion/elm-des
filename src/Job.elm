@@ -20,14 +20,15 @@ type Priority
 type alias Job =
     { id        : JobID
     , priority  : Priority
+    , size      : Float      -- scales service duration (1.0 = baseline)
     , label     : String
     , arrivedAt : EventTime
     }
 
 
-newJob : JobID -> Priority -> String -> EventTime -> Job
-newJob id_ pri lbl time =
-    { id = id_, priority = pri, label = lbl, arrivedAt = time }
+newJob : JobID -> Priority -> Float -> String -> EventTime -> Job
+newJob id_ pri sz lbl time =
+    { id = id_, priority = pri, size = sz, label = lbl, arrivedAt = time }
 
 
 priorityRank : Priority -> Int

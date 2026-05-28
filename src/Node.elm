@@ -15,6 +15,7 @@ module Node exposing
 import EventTime exposing (EventTime)
 import Id exposing (JobID, LockID, QueueID)
 import Job exposing (Priority(..))
+import ServiceTime exposing (ServiceTime)
 
 
 type DispatchRule
@@ -31,7 +32,7 @@ type alias SourceConfig =
 
 
 type alias WorkerConfig =
-    { serviceRate : Float     -- mean jobs per time unit
+    { serviceTime : ServiceTime
     , preemptive  : Bool
     , signoff     : Maybe LockID
     }

@@ -12,6 +12,7 @@ import Lock exposing (AcquireResult(..))
 import Node exposing (NodeData, NodeKind(..), NodeState(..))
 import Queue exposing (EnqueueResult(..))
 import Random
+import ServiceTime
 import SimState exposing (SimState)
 import Topology exposing (Topology)
 
@@ -79,7 +80,7 @@ onJobArrived topo nid jid state =
                 Source cfg ->
                     let
                         job =
-                            newJob jid cfg.jobPriority cfg.jobLabel state.clock
+                            newJob jid cfg.jobPriority 1.0 cfg.jobLabel state.clock
 
                         -- schedule next arrival
                         ( gap, seed1 ) =
@@ -154,7 +155,7 @@ beginSignoff : NodeID -> LockID -> JobID -> Lock.LockState -> SimState -> SimSta
 beginSignoff nid lid jid lock state =
     let
         ( duration, seed1 ) =
-            sampleExp lock.config.serviceRate state.seed
+            ServiceTime.sample lock.config.serviceTime 1.0 state.seed
 
         completionTime =
             addTimes state.clock (EventTime duration)
@@ -317,7 +318,7 @@ startService nid node job state =
         Worker cfg ->
             let
                 ( duration, seed1 ) =
-                    sampleExp cfg.serviceRate state.seed
+                    ServiceTime.sample cfg.serviceTime job.size state.seed
 
                 completionTime =
                     addTimes state.clock (EventTime duration)
@@ -341,6 +342,8 @@ startService nid node job state =
 
 -- ── Utility ───────────────────────────────────────────────────────────────────
 
+-- Exponential inter-arrival sampling for Source nodes (Poisson process).
+-- Service time sampling is handled by ServiceTime.sample.
 sampleExp : Float -> Random.Seed -> ( Int, Random.Seed )
 sampleExp rate seed =
     let

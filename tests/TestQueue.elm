@@ -23,7 +23,7 @@ pfifo cap =
 
 job : Int -> Priority -> Job
 job n pri =
-    newJob (JobID n) pri "test" (EventTime 0)
+    newJob (JobID n) pri 1.0 "test" (EventTime 0)
 
 
 fill : List Job -> Queue -> Queue
