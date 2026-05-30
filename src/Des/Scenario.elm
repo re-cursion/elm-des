@@ -2,6 +2,7 @@ module Des.Scenario exposing
     ( Model
     , Msg(..)
     , PlaybackMode(..)
+    , RenderMode(..)
     , init
     , update
     , view
@@ -22,6 +23,8 @@ elm-presentation wires it like any Elm sub-component:
 -}
 
 import Browser.Events
+import Camera exposing (Camera)
+import IsoRenderer
 import Random
 import Dict exposing (Dict)
 import Engine
@@ -49,6 +52,11 @@ type PlaybackMode
     | Playing Float   -- simulated time-units per real second
 
 
+type RenderMode
+    = Flat2D
+    | Isometric
+
+
 type alias JobAnim =
     { x        : Float
     , y        : Float
@@ -72,6 +80,8 @@ type alias Model =
     , topo        : Topology
     , simState    : SimState
     , playback    : PlaybackMode
+    , renderMode  : RenderMode
+    , camera      : Camera
     , accumulator : Float
     , checkpoints : List SimState
     , jobAnims    : Dict Int JobAnim
@@ -84,11 +94,16 @@ type Msg
     = Step
     | RunToEnd
     | Reset
-    | SetSpeed Float     -- 0.0 = pause; positive = simulated units/sec
+    | SetSpeed Float
     | TriggerInterrupt
     | SetInterruptDuration String
     | ScrubTo String
     | Tick
+    | ToggleRenderMode
+    | SpinCamera Float
+    | TiltCamera Float
+    | ZoomCamera Float
+    | ResetCamera
 
 
 -- ── Init ──────────────────────────────────────────────────────────────────────
@@ -106,12 +121,23 @@ init cfg =
       , topo        = topo
       , simState    = simState
       , playback    = Stopped
+      , renderMode  = Flat2D
+      , camera      = isoCamera (buildLayout cfg)
       , accumulator = 0
       , checkpoints = []
       , jobAnims    = Dict.empty
       }
     , Cmd.none
     )
+
+
+isoCamera : Layout -> Camera
+isoCamera layout =
+    { spinAngle = pi / 4
+    , tiltAngle = pi / 6
+    , scale     = 48.0
+    , origin    = ( layout.svgW / 2, layout.svgH / 2 )
+    }
 
 
 buildLayout : ScenarioConfig -> Layout
@@ -219,6 +245,26 @@ update msg model =
 
         SetInterruptDuration _ ->
             ( model, Cmd.none )
+
+        ToggleRenderMode ->
+            let
+                next = case model.renderMode of
+                    Flat2D    -> Isometric
+                    Isometric -> Flat2D
+            in
+            ( { model | renderMode = next }, Cmd.none )
+
+        SpinCamera delta ->
+            ( { model | camera = Camera.spin delta model.camera }, Cmd.none )
+
+        TiltCamera delta ->
+            ( { model | camera = Camera.tilt delta model.camera }, Cmd.none )
+
+        ZoomCamera factor ->
+            ( { model | camera = Camera.zoom factor model.camera }, Cmd.none )
+
+        ResetCamera ->
+            ( { model | camera = isoCamera model.layout }, Cmd.none )
 
         ScrubTo s ->
             case String.toInt s of
