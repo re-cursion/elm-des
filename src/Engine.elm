@@ -152,8 +152,11 @@ onJobArrived topo nid jid state =
                         priority =
                             if roll < cfg.highPriorityFraction then High else cfg.jobPriority
 
-                        job =
+                        rawJob =
                             newJob jid priority 1.0 cfg.jobLabel state.clock
+
+                        job =
+                            { rawJob | history = [ ( state.clock, JobArrived nid jid ) ] }
 
                         -- schedule next arrival
                         ( gap, seed1 ) =
@@ -218,11 +221,20 @@ startSignoffRequest nid lid jid node state =
 
         Just lock ->
             let
+                state0 =
+                    case SimState.getJob jid state of
+                        Just job ->
+                            SimState.putJob
+                                { job | history = ( state.clock, SignoffRequested nid lid jid ) :: job.history }
+                                state
+                        Nothing ->
+                            state
+
                 updatedNode =
                     { node | state = Signoff jid lid }
 
                 state1 =
-                    SimState.putNode nid updatedNode state
+                    SimState.putNode nid updatedNode state0
                         |> SimState.logEvent (event state.clock (SignoffRequested nid lid jid))
             in
             case Lock.acquire nid jid lock of
@@ -268,8 +280,17 @@ onSignoffComplete topo nid lid jid state =
 
                         Just ( waiterNid, waiterJid ) ->
                             beginSignoff waiterNid lid waiterJid lock1 state1
+
+                state3 =
+                    case SimState.getJob jid state2 of
+                        Just job ->
+                            SimState.putJob
+                                { job | history = ( state.clock, SignoffComplete nid lid jid ) :: job.history }
+                                state2
+                        Nothing ->
+                            state2
             in
-            releaseJobToOutputs topo nid jid node state2
+            releaseJobToOutputs topo nid jid node state3
 
         _ ->
             state
@@ -284,7 +305,12 @@ releaseJobToOutputs topo nid jid node state =
             state
 
         Just job ->
-            pushToOutputs topo nid job state
+            let
+                stamped =
+                    { job | history = ( state.clock, ServiceComplete nid jid ) :: job.history }
+            in
+            SimState.putJob stamped state
+                |> pushToOutputs topo nid stamped
                 |> becomeIdle topo nid node
 
 
@@ -453,7 +479,12 @@ tryPullFromQueue topo nid node qid state =
                 Nothing ->
                     state
 
-                Just ( job, queue1 ) ->
+                Just ( queueCopy, queue1 ) ->
+                    -- Use the store copy so history stamped since enqueue is included
+                    let
+                        job =
+                            SimState.getJob queueCopy.id state |> Maybe.withDefault queueCopy
+                    in
                     SimState.putQueue qid queue1 state
                         |> SimState.logEvent (event state.clock (JobDequeued qid nid job.id))
                         |> startService topo nid { node | state = Idle } job
@@ -464,19 +495,23 @@ startService topo nid node job state =
     case node.kind of
         Worker cfg ->
             let
+                stamped =
+                    { job | history = ( state.clock, ServiceStarted nid job.id ) :: job.history }
+
                 ( duration, seed1 ) =
-                    ServiceTime.sample cfg.serviceTime job.size state.seed
+                    ServiceTime.sample cfg.serviceTime stamped.size state.seed
 
                 completionTime =
                     addTimes state.clock (EventTime duration)
 
                 busyNode =
-                    { node | state = Busy job.id completionTime }
+                    { node | state = Busy stamped.id completionTime }
             in
             { state | seed = seed1 }
+                |> SimState.putJob stamped
                 |> SimState.putNode nid busyNode
-                |> SimState.logEvent (event state.clock (ServiceStarted nid job.id))
-                |> SimState.scheduleEvent (event completionTime (ServiceComplete nid job.id))
+                |> SimState.logEvent (event state.clock (ServiceStarted nid stamped.id))
+                |> SimState.scheduleEvent (event completionTime (ServiceComplete nid stamped.id))
 
         Dispatcher cfg ->
             -- Route job, persist updated config (RoundRobin index), then pull next
@@ -529,8 +564,12 @@ startService topo nid node job state =
                     state2
 
         Sink ->
+            let
+                completed =
+                    { job | history = ( state.clock, JobArrived nid job.id ) :: job.history }
+            in
             state
-                |> SimState.removeJob job.id
+                |> SimState.completeJob completed
                 |> SimState.logEvent (event state.clock (JobArrived nid job.id))
 
         _ ->

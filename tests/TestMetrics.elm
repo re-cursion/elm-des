@@ -229,6 +229,42 @@ suite =
                         util
             ]
 
+        , describe "job metrics"
+            [ test "completed jobs appear in jobs list" <|
+                \_ ->
+                    let
+                        m = Metrics.compute (runFor 500)
+                    in
+                    Expect.greaterThan 0 (List.length m.jobs)
+
+            , test "all job cycle times are positive" <|
+                \_ ->
+                    let
+                        m = Metrics.compute (runFor 500)
+                    in
+                    m.jobs
+                        |> List.all (\j -> j.cycleTime > 0)
+                        |> Expect.equal True
+
+            , test "serviceTime <= cycleTime for every completed job" <|
+                \_ ->
+                    let
+                        m = Metrics.compute (runFor 500)
+                    in
+                    m.jobs
+                        |> List.all (\j -> j.serviceTime <= j.cycleTime)
+                        |> Expect.equal True
+
+            , test "waitTime = cycleTime - serviceTime - signoffTime" <|
+                \_ ->
+                    let
+                        m = Metrics.compute (runFor 500)
+                    in
+                    m.jobs
+                        |> List.all (\j -> j.waitTime == j.cycleTime - j.serviceTime - j.signoffTime)
+                        |> Expect.equal True
+            ]
+
         , describe "queue metrics"
             [ test "queue avgLength is non-negative" <|
                 \_ ->

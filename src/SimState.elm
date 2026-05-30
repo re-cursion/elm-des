@@ -12,6 +12,7 @@ module SimState exposing
     , putLock
     , putJob
     , removeJob
+    , completeJob
     , logEvent
     , scheduleEvent
     , popNextEvent
@@ -29,29 +30,31 @@ import Random
 
 
 type alias SimState =
-    { nodes      : Dict Int NodeData
-    , queues     : Dict Int Queue
-    , locks      : Dict String LockState
-    , jobs       : Dict Int Job      -- all active jobs keyed by JobID int
-    , seed       : Random.Seed
-    , clock      : EventTime
-    , eventQueue : List Event        -- sorted ascending by time
-    , eventLog   : List Event        -- full history, newest first
-    , nextID     : Int               -- counter for JobID generation
+    { nodes         : Dict Int NodeData
+    , queues        : Dict Int Queue
+    , locks         : Dict String LockState
+    , jobs          : Dict Int Job      -- active jobs (in queues or being processed)
+    , completedJobs : Dict Int Job      -- jobs that reached the Sink (history preserved)
+    , seed          : Random.Seed
+    , clock         : EventTime
+    , eventQueue    : List Event        -- sorted ascending by time
+    , eventLog      : List Event        -- full history, newest first
+    , nextID        : Int               -- counter for JobID generation
     }
 
 
 init : Random.Seed -> SimState
 init seed =
-    { nodes      = Dict.empty
-    , queues     = Dict.empty
-    , locks      = Dict.empty
-    , jobs       = Dict.empty
-    , seed       = seed
-    , clock      = EventTime 0
-    , eventQueue = []
-    , eventLog   = []
-    , nextID     = 1
+    { nodes         = Dict.empty
+    , queues        = Dict.empty
+    , locks         = Dict.empty
+    , jobs          = Dict.empty
+    , completedJobs = Dict.empty
+    , seed          = seed
+    , clock         = EventTime 0
+    , eventQueue    = []
+    , eventLog      = []
+    , nextID        = 1
     }
 
 
@@ -117,6 +120,17 @@ putJob job state =
 removeJob : JobID -> SimState -> SimState
 removeJob (JobID jid) state =
     { state | jobs = Dict.remove jid state.jobs }
+
+
+completeJob : Job -> SimState -> SimState
+completeJob job state =
+    let
+        (JobID jid) = job.id
+    in
+    { state
+        | jobs          = Dict.remove jid state.jobs
+        , completedJobs = Dict.insert jid job state.completedJobs
+    }
 
 
 logEvent : Event -> SimState -> SimState

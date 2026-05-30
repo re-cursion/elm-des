@@ -1,6 +1,7 @@
 module Metrics exposing
     ( NodeMetrics
     , QueueMetrics
+    , JobMetrics
     , SystemMetrics
     , compute
     , BusySegment
@@ -11,8 +12,9 @@ module Metrics exposing
 
 import Dict exposing (Dict)
 import Event exposing (EventType(..))
-import EventTime exposing (eventTime2Int)
+import EventTime exposing (EventTime, eventTime2Int)
 import Id exposing (JobID(..), NodeID(..), QueueID(..))
+import Job exposing (Job)
 import Node exposing (NodeKind(..))
 import SimState exposing (SimState)
 
@@ -31,6 +33,15 @@ type alias QueueMetrics =
     }
 
 
+type alias JobMetrics =
+    { jobId       : JobID
+    , cycleTime   : Int   -- ticks from source arrival to sink arrival
+    , serviceTime : Int   -- sum of all service windows
+    , signoffTime : Int   -- sum of all signoff windows
+    , waitTime    : Int   -- cycleTime - serviceTime - signoffTime
+    }
+
+
 type alias SystemMetrics =
     { totalTicks   : Int
     , throughput   : Float     -- completed jobs per tick
@@ -40,6 +51,7 @@ type alias SystemMetrics =
     , p95CycleTime : Float
     , nodes        : Dict Int NodeMetrics
     , queues       : Dict Int QueueMetrics
+    , jobs         : List JobMetrics
     }
 
 
@@ -144,6 +156,10 @@ compute state =
                 toFloat (List.sum acc.cycleTimes) / toFloat n
             else
                 0.0
+
+        jobMetrics =
+            Dict.values state.completedJobs
+                |> List.map jobMetricsFromJob
     in
     { totalTicks   = totalTicks
     , throughput   = if totalTicks > 0 then toFloat n / toFloat totalTicks else 0.0
@@ -153,6 +169,7 @@ compute state =
     , p95CycleTime = intPercentile 95 sorted
     , nodes        = nodeMetrics
     , queues       = queueMetrics
+    , jobs         = jobMetrics
     }
 
 
@@ -408,6 +425,92 @@ tlUpdateQueue qid delta t acc =
                 (Just << (::) { t = t, len = newLen } << Maybe.withDefault [])
                 acc.queueHist
     }
+
+
+-- ── Per-job metrics ───────────────────────────────────────────────────────────
+
+jobMetricsFromJob : Job -> JobMetrics
+jobMetricsFromJob job =
+    let
+        arrivedTick =
+            eventTime2Int job.arrivedAt
+
+        -- history is newest-first; find the sink arrival (last JobArrived = first in list that matches)
+        sinkTick =
+            job.history
+                |> List.filterMap
+                    (\( t, kind ) ->
+                        case kind of
+                            JobArrived _ _ -> Just (eventTime2Int t)
+                            _              -> Nothing
+                    )
+                |> List.head
+                |> Maybe.withDefault arrivedTick
+
+        cycleTime =
+            sinkTick - arrivedTick
+
+        -- sum all matched ServiceStarted/ServiceComplete pairs by scanning chronologically
+        chronoHistory =
+            List.reverse job.history
+
+        serviceTime =
+            computeWindowSum
+                (\k -> case k of
+                    ServiceStarted _ _ -> True
+                    _ -> False
+                )
+                (\k -> case k of
+                    ServiceComplete _ _ -> True
+                    _ -> False
+                )
+                chronoHistory
+
+        signoffTime =
+            computeWindowSum
+                (\k -> case k of
+                    SignoffRequested _ _ _ -> True
+                    _ -> False
+                )
+                (\k -> case k of
+                    SignoffComplete _ _ _ -> True
+                    _ -> False
+                )
+                chronoHistory
+    in
+    { jobId       = job.id
+    , cycleTime   = cycleTime
+    , serviceTime = serviceTime
+    , signoffTime = signoffTime
+    , waitTime    = max 0 (cycleTime - serviceTime - signoffTime)
+    }
+
+
+-- Sum durations of matched open/close event pairs.
+computeWindowSum : (EventType -> Bool) -> (EventType -> Bool) -> List ( EventTime, EventType ) -> Int
+computeWindowSum isOpen isClose history =
+    let
+        go events openAt total =
+            case events of
+                [] ->
+                    total
+
+                ( t, kind ) :: rest ->
+                    if isOpen kind then
+                        go rest (Just (eventTime2Int t)) total
+
+                    else if isClose kind then
+                        case openAt of
+                            Just startT ->
+                                go rest Nothing (total + eventTime2Int t - startT)
+
+                            Nothing ->
+                                go rest Nothing total
+
+                    else
+                        go rest openAt total
+    in
+    go history Nothing 0
 
 
 -- ── Statistics helpers ────────────────────────────────────────────────────────

@@ -1488,13 +1488,18 @@ Goal: a working, correctly simulating engine with a plain-text / table UI.
 - [x] `Interrupt` events pre-scheduled at t=150–170 and t=350–370; interactive "Interrupt"
       button in playback controls for manual one-shot interrupts
 - [x] Ensemble runner uses the currently selected preset and parameters
-- [x] 77 tests: TestQueue, TestJob, TestEngine (Dispatcher + Interrupt + preemption + RandomChoice),
-      TestServiceTime, TestMetrics (interrupt-aware utilisation), TestEnsemble
+- [x] 81 tests: TestQueue, TestJob, TestEngine (Dispatcher + Interrupt + preemption + RandomChoice),
+      TestServiceTime, TestMetrics (interrupt-aware utilisation, JobMetrics), TestEnsemble
 
 **Still pending from Phase 3:**
 - [ ] `ScenarioConfig` Elm type + `Json.Decode` pipeline (all scenarios are Elm code only)
 - [ ] `Theme2D` type — vocabulary, sprite sources, background; canvas hard-codes shapes/colours
-- [ ] `Job.history` field — stamp `(EventTime, EventType)` at each stage for per-job breakdown
+- [x] `Job.history : List (EventTime, EventType)` — stamped at 6 transitions (source arrival,
+      ServiceStarted, ServiceComplete, SignoffRequested, SignoffComplete, sink arrival); store copy
+      used in `tryPullFromQueue` so history survives queue residence; completed jobs move to
+      `SimState.completedJobs` (replacing `removeJob` at Sink)
+- [x] `JobMetrics` — cycleTime, serviceTime, signoffTime, waitTime computed from each completed
+      job's history via `computeWindowSum`; exposed in `SystemMetrics.jobs`
 - [x] Metrics: `haltedTicks` per worker tracked from `WorkerHalted`/`WorkerResumed` events;
       utilisation denominator is `totalTicks − haltedTicks[nid]` so halted windows don't deflate utilisation
 - [x] `RandomChoice` routing in `Dispatcher` — seeds `Random.int 0 (n-1)`, threads updated seed
