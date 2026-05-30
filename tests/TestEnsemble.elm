@@ -29,10 +29,10 @@ scenario =
                 |> Topology.addInputEdge  { from = QueueID 2, to = NodeID 3 }
 
         sourceCfg =
-            { arrivalRate = 0.3, jobPriority = Job.Normal, jobLabel = "job" }
+            { arrivalRate = 0.3, jobPriority = Job.Normal, highPriorityFraction = 0.0, jobLabel = "job" }
 
         workerCfg =
-            { serviceTime = Exponential 0.5, preemptive = False, signoff = Nothing }
+            { serviceTime = Exponential 0.5, preemptive = False, signoff = Nothing, halted = False }
 
         mkQ =
             Queue.empty { capacity = 10, discipline = Queue.FIFO, overflow = Queue.Block }

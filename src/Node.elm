@@ -8,12 +8,14 @@ module Node exposing
     , NodeData
     , makeSource
     , makeWorker
+    , makeDispatcher
+    , makeInterrupt
     , makeSink
     , isIdle
     )
 
 import EventTime exposing (EventTime)
-import Id exposing (JobID, LockID, QueueID)
+import Id exposing (JobID, LockID)
 import Job exposing (Priority(..))
 import ServiceTime exposing (ServiceTime)
 
@@ -25,9 +27,10 @@ type DispatchRule
 
 
 type alias SourceConfig =
-    { arrivalRate : Float     -- mean jobs per time unit
-    , jobPriority : Priority
-    , jobLabel    : String
+    { arrivalRate          : Float   -- mean jobs per time unit
+    , jobPriority          : Priority
+    , highPriorityFraction : Float   -- 0.0–1.0; fraction of arrivals upgraded to High priority
+    , jobLabel             : String
     }
 
 
@@ -35,13 +38,13 @@ type alias WorkerConfig =
     { serviceTime : ServiceTime
     , preemptive  : Bool
     , signoff     : Maybe LockID
+    , halted      : Bool   -- True while an interrupt window is active for this worker
     }
 
 
 type alias DispatcherConfig =
-    { rule         : DispatchRule
-    , dispatchTime : Float
-    , roundRobinIndex : Int   -- mutable; updated each dispatch
+    { rule            : DispatchRule
+    , roundRobinIndex : Int   -- mutable index for RoundRobin routing
     }
 
 
@@ -49,6 +52,7 @@ type NodeKind
     = Source SourceConfig
     | Worker WorkerConfig
     | Dispatcher DispatcherConfig
+    | Interrupt
     | Sink
 
 
@@ -76,6 +80,16 @@ makeSource lbl cfg =
 makeWorker : String -> WorkerConfig -> NodeData
 makeWorker lbl cfg =
     { kind = Worker cfg, state = Idle, label = lbl }
+
+
+makeDispatcher : String -> DispatcherConfig -> NodeData
+makeDispatcher lbl cfg =
+    { kind = Dispatcher cfg, state = Idle, label = lbl }
+
+
+makeInterrupt : String -> NodeData
+makeInterrupt lbl =
+    { kind = Interrupt, state = Idle, label = lbl }
 
 
 makeSink : String -> NodeData

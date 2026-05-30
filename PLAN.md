@@ -57,8 +57,8 @@ type EventType
     | SignoffRequested NodeID LockID JobID   -- worker waiting for approver
     | SignoffStarted   NodeID LockID JobID   -- approver began inspection
     | SignoffComplete  NodeID LockID JobID   -- job cleared; worker unblocked
-    | MeetingStarted                         -- boss node: all workers pause
-    | MeetingEnded
+    | InterruptStarted                       -- interrupt node: all workers hold
+    | InterruptEnded
 ```
 
 The event log is the ground truth of the simulation — metrics, replays, and
@@ -543,7 +543,7 @@ events up to that time are included.
 | **Sign-off latency** | `SignoffComplete.time − SignoffRequested.time` per job |
 | **Blocking time** | time a node spent in `WaitingForOutput` state |
 | **Drop rate** | count `JobDropped` per queue ÷ total arrivals |
-| **Meeting overhead** | `Σ (MeetingEnded.time − MeetingStarted.time)` as % of elapsed |
+| **Interrupt overhead** | `Σ (InterruptEnded.time − InterruptStarted.time)` as % of elapsed |
 
 Aggregate statistics (mean, p50, p95, max) are computed over each job-level
 series. Cycle time, wait time, and service time are the most useful for demos.
@@ -760,8 +760,8 @@ type NodeState
     = SourceNode  SourceState
     | WorkerNode  WorkerState
     | Dispatcher  DispatcherState
+    | Interrupt                    -- no config; events pre-scheduled or triggered from UI
     | SinkNode    SinkState
-    | BossNode    BossState
 
 type alias WorkerState =
     { activity    : WorkerActivity
@@ -1429,7 +1429,7 @@ Goal: a working, correctly simulating engine with a plain-text / table UI.
 
 **What Phase 1 does not yet include** (deferred to later phases):
 - Playback speed slider / `Time.every` animation loop (Phase 2+)
-- Dispatcher and Boss nodes (Phase 2)
+- Dispatcher and Interrupt nodes (Phase 3)
 - JSON scenario loading (Phase 3)
 - Flat 2D SVG visualisation and themed job shapes (Phase 3/4)
 - Rotatable isometric view (Phase 5)
@@ -1450,28 +1450,55 @@ Goal: a working, correctly simulating engine with a plain-text / table UI.
 - [x] Ensemble UI panel in `Main.elm`: replica count + duration inputs, results tables
 - [x] 65 tests passing: TestQueue, TestJob, TestEngine, TestServiceTime, TestMetrics, TestEnsemble
 
-**Remaining Phase 2 items (deferred):**
-- [ ] `Dispatcher` node: routing rule (round-robin, shortest-queue, random)
-- [ ] `BossNode`: fires `MeetingStarted` / `MeetingEnded`; Workers → `Paused`
-- [ ] Metrics: exclude paused time from utilisation
+### Phase 3 — 2D Visual Renderer + Node Types + Topology Presets ✅ largely done
 
-### Phase 3 — JSON Scenarios + 2D Visual Renderer + Metrics
+**Engine additions:**
+- [x] `Dispatcher` node — `ShortestQueue` routing (routes to least-loaded output queue);
+      `RoundRobin` implemented and selectable via UI; `RandomChoice` stub present
+- [x] `Interrupt` node — fires `InterruptStarted` / `InterruptEnded`; per-worker `halted : Bool`
+      in `WorkerConfig` replaces the former global `SimState.interruptActive` flag; `onInterruptStarted`
+      fans out to all Workers and logs `WorkerHalted NodeID`; `onInterruptResumed` clears halted and
+      wakes idle workers, logging `WorkerResumed NodeID`
+- [x] `SimState.isInterruptActive` — derived helper (any Worker cfg.halted == True); replaces
+      direct field access
+- [x] `Engine.wakeConsumers` guards Workers against starting new jobs while `cfg.halted`
+- [x] Preemptive scheduling — `ServicePreempted NodeID JobID` event; `tryPreempt` in engine;
+      stale `ServiceComplete` guard; all presets use `preemptive = True` on workers
+- [x] `Signoff / Lock` exercised in `TwoParallel` — Worker B requires inspector sign-off
+      (capacity=1 lock, `Deterministic 5` ticks); purple `Signoff` state visible on canvas
 
-- [ ] `ScenarioConfig` Elm type + `Json.Decode` pipeline
-- [ ] Scenario loader: bundled via flags and/or `Http.get` from `/scenarios/`
-- [ ] SVG canvas driven by theme: nodes as shapes, queues as labelled connectors
-- [ ] Animated job dots moving along edges during `Playing` mode
-- [ ] `Theme2D` type + default "plain" theme (monochrome, generic labels)
-- [ ] Scenario picker UI (loads a different JSON without recompile)
-- [ ] `Metrics.elm`: `computeMetrics : EventTime -> List Event -> SystemMetrics`
-- [ ] Layer 1 inline indicators: utilisation bar on worker, drop badge on queue
-- [ ] Layer 2 sparklines: busy/idle timeline strip per node, length history per queue
-- [ ] Layer 3 global panel: cycle time histogram, throughput chart, system utilisation
-- [ ] `CompletedRun` snapshots: checkpoint every 100 events during `drainAll`
-- [ ] `Scrubbing` playback mode: time slider, replay to target from nearest snapshot
-- [ ] All metrics and sparklines update live while scrubbing
-- [ ] Transition from `Playing` → `Scrubbing` on simulation end; resume `Playing` from scrub position
-- [ ] `Job.history` field populated: stamp `(EventTime, EventType)` at each stage transition
+**2D visual renderer:**
+- [x] SVG canvas with three hardcoded preset layouts (not yet driven by JSON/Theme2D)
+- [x] Animated job transit dots — `JobAnim` tracks current and target canvas position;
+      dots move at 400 SVG-units/sec in real time, cleared at Max speed
+- [x] Layer 1 inline indicators: utilisation bar on Worker nodes (per-node, not hardcoded),
+      fill-level bar + slot dots on queues, drop-count badge, priority-coloured job dots,
+      inspector lock badge below Worker B showing `free` / `busy` / `+N wait` state
+- [x] Layer 2 sparklines: busy/idle strip per Worker, step-function queue-length chart
+- [x] Layer 3 histogram: cycle-time distribution with p50 (green) and p95 (orange) markers
+- [x] `Metrics.computeTimelines` — single-pass to produce `BusySegment` / `QueueStep` lists
+- [x] `CompletedRun` snapshots — checkpoint every 100 events during `buildCheckpoints`
+- [x] Time-travel scrubber — range slider; replays from nearest checkpoint via `Engine.advanceUntil`
+
+**Scenario system:**
+- [x] `TopologyPreset` — `SingleWorker` (M/M/1) | `TwoParallel` (M/M/2) | `ThreePipeline`;
+      dropdown selector in the scenario panel
+- [x] Scenario parameter panel — arrival rate, service-time distribution + params, queue
+      capacity, % high-priority, dispatch rule (ShortestQueue / RoundRobin for TwoParallel)
+- [x] `Interrupt` events pre-scheduled at t=150–170 and t=350–370; interactive "Interrupt"
+      button in playback controls for manual one-shot interrupts
+- [x] Ensemble runner uses the currently selected preset and parameters
+- [x] 77 tests: TestQueue, TestJob, TestEngine (Dispatcher + Interrupt + preemption + RandomChoice),
+      TestServiceTime, TestMetrics (interrupt-aware utilisation), TestEnsemble
+
+**Still pending from Phase 3:**
+- [ ] `ScenarioConfig` Elm type + `Json.Decode` pipeline (all scenarios are Elm code only)
+- [ ] `Theme2D` type — vocabulary, sprite sources, background; canvas hard-codes shapes/colours
+- [ ] `Job.history` field — stamp `(EventTime, EventType)` at each stage for per-job breakdown
+- [x] Metrics: `haltedTicks` per worker tracked from `WorkerHalted`/`WorkerResumed` events;
+      utilisation denominator is `totalTicks − haltedTicks[nid]` so halted windows don't deflate utilisation
+- [x] `RandomChoice` routing in `Dispatcher` — seeds `Random.int 0 (n-1)`, threads updated seed
+      back through `state.seed` before `tryQueues`
 
 ### Phase 4 — Themed Scenarios + elm-presentation Bridge
 
@@ -1584,9 +1611,10 @@ elm-presentation bridge are all unchanged.
 2. **Multiple input queues per node** — Should a Worker pull from the *first
    non-empty* queue, or merge all inputs? Probably configurable per node.
 
-3. **Dispatcher routing rules** — Round-robin needs per-node mutable state
-   (a counter). Shortest-queue needs to inspect queue states. Both are
-   straightforward but should be decided before implementation.
+3. **Dispatcher routing rules** — `ShortestQueue` is implemented. `RoundRobin`
+   needs per-node mutable state (a counter in `DispatcherConfig.roundRobinIndex`,
+   already present but not updated). `RandomChoice` needs the seed threaded into
+   `startService`.
 
 4. **Time units** — Integer ticks work fine for now. A future improvement is
    floating-point time for more accurate Poisson sampling, especially when

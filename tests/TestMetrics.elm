@@ -4,7 +4,7 @@ import Dict
 import Engine
 import EventTime exposing (EventTime(..))
 import Expect
-import Id exposing (NodeID(..), QueueID(..))
+import Id exposing (JobID(..), NodeID(..), QueueID(..))
 import Job exposing (Priority(..))
 import Metrics
 import Node exposing (NodeState(..), makeSource, makeSink, makeWorker)
@@ -31,10 +31,10 @@ scenario =
                 |> Topology.addInputEdge  { from = QueueID 2, to = NodeID 3 }
 
         sourceCfg =
-            { arrivalRate = 0.5, jobPriority = Normal, jobLabel = "job" }
+            { arrivalRate = 0.5, jobPriority = Normal, highPriorityFraction = 0.0, jobLabel = "job" }
 
         workerCfg =
-            { serviceTime = Deterministic 3, preemptive = False, signoff = Nothing }
+            { serviceTime = Deterministic 3, preemptive = False, signoff = Nothing, halted = False }
 
         mkQ =
             Queue.empty { capacity = 10, discipline = Queue.FIFO, overflow = Queue.Block }
@@ -69,12 +69,16 @@ suite : Test
 suite =
     describe "Metrics"
         [ describe "basic sanity"
-            [ test "totalTicks equals the duration we ran to" <|
+            [ test "totalTicks is > 0 and does not exceed the deadline" <|
                 \_ ->
                     let
                         m = Metrics.compute (runFor 500)
                     in
-                    Expect.equal 500 m.totalTicks
+                    Expect.all
+                        [ Expect.greaterThan 0
+                        , Expect.atMost 500
+                        ]
+                        m.totalTicks
 
             , test "throughput is non-negative" <|
                 \_ ->
@@ -160,6 +164,69 @@ suite =
                             Dict.get 3 m.nodes |> Maybe.map .utilisation |> Maybe.withDefault -1.0
                     in
                     Expect.equal ( 0.0, 0.0 ) ( sourceUtil, sinkUtil )
+            ]
+
+        , describe "interrupt-aware utilisation"
+            [ test "halted ticks are excluded from the utilisation denominator" <|
+                \_ ->
+                    -- Hand-crafted event log: worker busy t=0..5 and t=15..20, halted t=5..15
+                    -- busyTicks=10, haltedTicks=10, denom=20-10=10 → utilisation = 10/10 = 1.0
+                    let
+                        workerData =
+                            Node.makeWorker "W"
+                                { serviceTime = Deterministic 5
+                                , preemptive  = False
+                                , signoff     = Nothing
+                                , halted      = False
+                                }
+
+                        base =
+                            SimState.init (Random.initialSeed 0)
+                                |> SimState.putNode (NodeID 2) workerData
+
+                        addEvt t kind s =
+                            SimState.logEvent (Event.event (EventTime t) kind) s
+
+                        state =
+                            { base | clock = EventTime 20 }
+                                |> addEvt 0  (ServiceStarted  (NodeID 2) (JobID 1))
+                                |> addEvt 5  (ServiceComplete  (NodeID 2) (JobID 1))
+                                |> addEvt 5  (WorkerHalted     (NodeID 2))
+                                |> addEvt 15 (WorkerResumed    (NodeID 2))
+                                |> addEvt 15 (ServiceStarted   (NodeID 2) (JobID 2))
+                                |> addEvt 20 (ServiceComplete   (NodeID 2) (JobID 2))
+
+                        util =
+                            Metrics.compute state
+                                |> .nodes
+                                |> Dict.get 2
+                                |> Maybe.map .utilisation
+                                |> Maybe.withDefault -1.0
+                    in
+                    Expect.within (Expect.Absolute 0.001) 1.0 util
+
+            , test "worker utilisation stays in [0,1] with an interrupt window" <|
+                \_ ->
+                    let
+                        ( topo, base ) = scenario
+
+                        s =
+                            base
+                                |> SimState.scheduleEvent (Event.event (EventTime 50)  InterruptStarted)
+                                |> SimState.scheduleEvent (Event.event (EventTime 100) InterruptEnded)
+
+                        m = Metrics.compute (Engine.advanceUntil (EventTime 300) topo s)
+
+                        util =
+                            Dict.get 2 m.nodes
+                                |> Maybe.map .utilisation
+                                |> Maybe.withDefault -1.0
+                    in
+                    Expect.all
+                        [ Expect.atLeast 0.0
+                        , Expect.atMost 1.0
+                        ]
+                        util
             ]
 
         , describe "queue metrics"

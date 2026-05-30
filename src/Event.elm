@@ -15,6 +15,7 @@ type EventType
     = JobArrived       NodeID JobID
     | ServiceStarted   NodeID JobID
     | ServiceComplete  NodeID JobID
+    | ServicePreempted NodeID JobID  -- job interrupted mid-service by higher-priority arrival
     | JobEnqueued      QueueID JobID
     | JobDequeued      QueueID NodeID JobID
     | JobBlocked       QueueID JobID
@@ -22,8 +23,10 @@ type EventType
     | SignoffRequested NodeID LockID JobID
     | SignoffStarted   NodeID LockID JobID
     | SignoffComplete  NodeID LockID JobID
-    | MeetingStarted
-    | MeetingEnded
+    | InterruptStarted
+    | InterruptEnded
+    | WorkerHalted  NodeID   -- logged when a worker enters halted state
+    | WorkerResumed NodeID   -- logged when a worker exits halted state
 
 
 type alias Event =

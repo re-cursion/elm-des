@@ -5,12 +5,13 @@ module Engine exposing
     , drainBounded
     )
 
+import Dict
 import Event exposing (Event, EventType(..), event)
 import EventTime exposing (EventTime(..), addTimes, compareTimes)
 import Id exposing (JobID(..), LockID(..), NodeID(..), QueueID(..))
-import Job exposing (Job, newJob)
+import Job exposing (Job, Priority(..), priorityRank, newJob)
 import Lock exposing (AcquireResult(..))
-import Node exposing (NodeData, NodeKind(..), NodeState(..))
+import Node exposing (DispatchRule(..), NodeData, NodeKind(..), NodeState(..))
 import Queue exposing (EnqueueResult(..))
 import Random
 import ServiceTime
@@ -76,9 +77,63 @@ handleEvent topo evt state =
         SignoffComplete nid lid jid ->
             onSignoffComplete topo nid lid jid state
 
+        InterruptStarted ->
+            onInterruptStarted topo state
+
+        InterruptEnded ->
+            onInterruptResumed topo state
+
         -- All other event types are purely informational (already logged)
         _ ->
             state
+
+
+-- ── Interrupt: halt / resume workers ─────────────────────────────────────────
+
+-- Set halted=True on every Worker; log a WorkerHalted event for each.
+onInterruptStarted : Topology -> SimState -> SimState
+onInterruptStarted _ state =
+    Dict.foldl
+        (\nid node acc ->
+            case node.kind of
+                Worker cfg ->
+                    SimState.putNode (NodeID nid) { node | kind = Worker { cfg | halted = True } } acc
+                        |> SimState.logEvent (event state.clock (WorkerHalted (NodeID nid)))
+
+                _ ->
+                    acc
+        )
+        state
+        state.nodes
+
+
+-- Clear halted=False on every Worker; log WorkerResumed; wake idle ones.
+onInterruptResumed : Topology -> SimState -> SimState
+onInterruptResumed topo state =
+    Dict.foldl
+        (\nid node acc ->
+            case node.kind of
+                Worker cfg ->
+                    let
+                        resumedNode = { node | kind = Worker { cfg | halted = False } }
+                        acc1 =
+                            SimState.putNode (NodeID nid) resumedNode acc
+                                |> SimState.logEvent (event state.clock (WorkerResumed (NodeID nid)))
+                    in
+                    if node.state == Idle then
+                        case Topology.nodeInput (NodeID nid) topo of
+                            Just qid ->
+                                tryPullFromQueue topo (NodeID nid) resumedNode qid acc1
+                            Nothing ->
+                                acc1
+                    else
+                        acc1
+
+                _ ->
+                    acc
+        )
+        state
+        state.nodes
 
 
 -- ── Source: new job arrives ───────────────────────────────────────────────────
@@ -90,12 +145,19 @@ onJobArrived topo nid jid state =
             case kind of
                 Source cfg ->
                     let
+                        -- Sample priority: fraction of arrivals get High priority
+                        ( roll, seed0 ) =
+                            Random.step (Random.float 0 1) state.seed
+
+                        priority =
+                            if roll < cfg.highPriorityFraction then High else cfg.jobPriority
+
                         job =
-                            newJob jid cfg.jobPriority 1.0 cfg.jobLabel state.clock
+                            newJob jid priority 1.0 cfg.jobLabel state.clock
 
                         -- schedule next arrival
                         ( gap, seed1 ) =
-                            sampleExp cfg.arrivalRate state.seed
+                            sampleExp cfg.arrivalRate seed0
 
                         ( nextJid, state1 ) =
                             SimState.nextJobID { state | seed = seed1 }
@@ -125,12 +187,21 @@ onServiceComplete topo nid jid state =
         Just ({ kind } as node) ->
             case kind of
                 Worker cfg ->
-                    case cfg.signoff of
-                        Just lid ->
-                            startSignoffRequest nid lid jid node state
+                    -- Ignore stale completions from jobs that were preempted
+                    case node.state of
+                        Busy currentJid _ ->
+                            if currentJid /= jid then
+                                state
+                            else
+                                case cfg.signoff of
+                                    Just lid ->
+                                        startSignoffRequest nid lid jid node state
 
-                        Nothing ->
-                            releaseJobToOutputs topo nid jid node state
+                                    Nothing ->
+                                        releaseJobToOutputs topo nid jid node state
+
+                        _ ->
+                            state
 
                 _ ->
                     state
@@ -213,22 +284,8 @@ releaseJobToOutputs topo nid jid node state =
             state
 
         Just job ->
-            case pushToOutputs topo nid job state of
-                -- pushToOutputs returns state; we need to know if it succeeded.
-                -- Use the node state after the push to detect blocking.
-                state1 ->
-                    -- If job still exists in state, it was blocked; mark node.
-                    -- If job was consumed by a Sink it's removed; node goes idle.
-                    case SimState.getJob jid state1 of
-                        Just _ ->
-                            -- job still around means it went into a queue (or was dropped)
-                            -- node can go idle and pull next
-                            becomeIdle topo nid node state1
-
-                        Nothing ->
-                            -- job was removed (only Sink does this right now,
-                            -- but unreachable here since jobs go via queues)
-                            becomeIdle topo nid node state1
+            pushToOutputs topo nid job state
+                |> becomeIdle topo nid node
 
 
 pushToOutputs : Topology -> NodeID -> Job -> SimState -> SimState
@@ -270,23 +327,88 @@ tryQueues topo job qids state =
                                 |> SimState.logEvent (event state.clock (JobDropped qid job.id))
 
 
--- After a job enters a queue, wake any idle node whose input is that queue
+-- After a job enters a queue, wake consumers:
+--   • Idle Workers pull immediately (unless interrupted).
+--   • Busy preemptive Workers may be displaced by a higher-priority arrival.
+--   • Non-Worker nodes (Dispatcher, Sink) always pull when idle.
 wakeConsumers : Topology -> QueueID -> SimState -> SimState
 wakeConsumers topo qid state =
     List.foldl
         (\nid acc ->
             case SimState.getNode nid acc of
                 Just node ->
-                    if node.state == Idle then
-                        tryPullFromQueue nid node qid acc
-                    else
-                        acc
+                    case ( node.state, node.kind ) of
+                        ( Idle, Worker cfg ) ->
+                            if cfg.halted then
+                                acc
+                            else
+                                tryPullFromQueue topo nid node qid acc
+
+                        ( Busy busyJid _, Worker cfg ) ->
+                            if cfg.preemptive && not cfg.halted then
+                                tryPreempt topo nid node busyJid qid acc
+                            else
+                                acc
+
+                        ( Idle, _ ) ->
+                            tryPullFromQueue topo nid node qid acc
+
+                        _ ->
+                            acc
 
                 Nothing ->
                     acc
         )
         state
         (Topology.queueConsumers qid topo)
+
+
+-- Attempt to preempt a busy worker if the head of qid has strictly higher priority.
+-- On preemption: dequeue the incoming job, re-enqueue the displaced job, start service.
+tryPreempt : Topology -> NodeID -> NodeData -> JobID -> QueueID -> SimState -> SimState
+tryPreempt topo nid workerNode busyJid qid state =
+    case ( SimState.getJob busyJid state, SimState.getQueue qid state ) of
+        ( Just busyJob, Just queue ) ->
+            case Queue.peek queue of
+                Nothing ->
+                    state
+
+                Just incomingJob ->
+                    if priorityRank incomingJob.priority > priorityRank busyJob.priority then
+                        case Queue.dequeue queue of
+                            Nothing ->
+                                state
+
+                            Just ( dequeued, queue1 ) ->
+                                let
+                                    state1 =
+                                        state
+                                            |> SimState.putQueue qid queue1
+                                            |> SimState.logEvent (event state.clock (JobDequeued qid nid dequeued.id))
+                                            |> SimState.logEvent (event state.clock (ServicePreempted nid busyJid))
+
+                                    -- Put the displaced job back in the queue
+                                    state2 =
+                                        case SimState.getQueue qid state1 of
+                                            Just q ->
+                                                case Queue.enqueue busyJob q of
+                                                    Enqueued q1 ->
+                                                        state1
+                                                            |> SimState.putQueue qid q1
+                                                            |> SimState.logEvent (event state1.clock (JobEnqueued qid busyJob.id))
+
+                                                    _ ->
+                                                        state1
+
+                                            Nothing ->
+                                                state1
+                                in
+                                startService topo nid { workerNode | state = Idle } dequeued state2
+                    else
+                        state
+
+        _ ->
+            state
 
 
 becomeIdle : Topology -> NodeID -> NodeData -> SimState -> SimState
@@ -298,16 +420,30 @@ becomeIdle topo nid node state =
         state1 =
             SimState.putNode nid idleNode state
     in
-    case Topology.nodeInput nid topo of
-        Just qid ->
-            tryPullFromQueue nid idleNode qid state1
+    case node.kind of
+        Worker cfg ->
+            -- Workers wait out an active interrupt before pulling new work
+            if cfg.halted then
+                state1
+            else
+                case Topology.nodeInput nid topo of
+                    Just qid ->
+                        tryPullFromQueue topo nid idleNode qid state1
 
-        Nothing ->
-            state1
+                    Nothing ->
+                        state1
+
+        _ ->
+            case Topology.nodeInput nid topo of
+                Just qid ->
+                    tryPullFromQueue topo nid idleNode qid state1
+
+                Nothing ->
+                    state1
 
 
-tryPullFromQueue : NodeID -> NodeData -> QueueID -> SimState -> SimState
-tryPullFromQueue nid node qid state =
+tryPullFromQueue : Topology -> NodeID -> NodeData -> QueueID -> SimState -> SimState
+tryPullFromQueue topo nid node qid state =
     case SimState.getQueue qid state of
         Nothing ->
             state
@@ -320,11 +456,11 @@ tryPullFromQueue nid node qid state =
                 Just ( job, queue1 ) ->
                     SimState.putQueue qid queue1 state
                         |> SimState.logEvent (event state.clock (JobDequeued qid nid job.id))
-                        |> startService nid { node | state = Idle } job
+                        |> startService topo nid { node | state = Idle } job
 
 
-startService : NodeID -> NodeData -> Job -> SimState -> SimState
-startService nid node job state =
+startService : Topology -> NodeID -> NodeData -> Job -> SimState -> SimState
+startService topo nid node job state =
     case node.kind of
         Worker cfg ->
             let
@@ -341,6 +477,56 @@ startService nid node job state =
                 |> SimState.putNode nid busyNode
                 |> SimState.logEvent (event state.clock (ServiceStarted nid job.id))
                 |> SimState.scheduleEvent (event completionTime (ServiceComplete nid job.id))
+
+        Dispatcher cfg ->
+            -- Route job, persist updated config (RoundRobin index), then pull next
+            let
+                outputs =
+                    Topology.nodeOutputs nid topo
+
+                byLength qid =
+                    SimState.getQueue qid state |> Maybe.map Queue.size |> Maybe.withDefault 0
+
+                ( orderedQueues, updatedCfg, seed1 ) =
+                    case cfg.rule of
+                        ShortestQueue ->
+                            ( List.sortBy byLength outputs, cfg, state.seed )
+
+                        RoundRobin ->
+                            let
+                                n   = max 1 (List.length outputs)
+                                idx = modBy n cfg.roundRobinIndex
+                            in
+                            ( List.drop idx outputs ++ List.take idx outputs
+                            , { cfg | roundRobinIndex = cfg.roundRobinIndex + 1 }
+                            , state.seed
+                            )
+
+                        RandomChoice ->
+                            let
+                                n                = max 1 (List.length outputs)
+                                ( idx, newSeed ) = Random.step (Random.int 0 (n - 1)) state.seed
+                            in
+                            ( List.drop idx outputs ++ List.take idx outputs
+                            , cfg
+                            , newSeed
+                            )
+
+                state1 =
+                    tryQueues topo job orderedQueues { state | seed = seed1 }
+
+                idleNode =
+                    { node | kind = Dispatcher updatedCfg, state = Idle }
+
+                state2 =
+                    SimState.putNode nid idleNode state1
+            in
+            case Topology.nodeInput nid topo of
+                Just inputQid ->
+                    tryPullFromQueue topo nid idleNode inputQid state2
+
+                Nothing ->
+                    state2
 
         Sink ->
             state

@@ -71,6 +71,17 @@ compute state =
         acc =
             List.foldl (step sourceIds sinkIds) emptyAcc chronological
 
+        -- close any halted windows still open at end of run
+        closedHaltedTicks =
+            Dict.foldl
+                (\nid startT hticks ->
+                    Dict.update nid
+                        (Just << (+) (totalTicks - startT) << Maybe.withDefault 0)
+                        hticks
+                )
+                acc.haltedTicks
+                acc.haltedStart
+
         -- node metrics
         nodeMetrics =
             Dict.map
@@ -79,12 +90,18 @@ compute state =
                         busy =
                             Dict.get nid acc.busyTicks |> Maybe.withDefault 0
 
+                        halted =
+                            Dict.get nid closedHaltedTicks |> Maybe.withDefault 0
+
+                        denom =
+                            totalTicks - halted
+
                         processed =
                             Dict.get nid acc.jobsProcessed |> Maybe.withDefault 0
                     in
                     { utilisation =
-                        if totalTicks > 0 then
-                            toFloat busy / toFloat totalTicks
+                        if denom > 0 then
+                            toFloat busy / toFloat denom
                         else
                             0.0
                     , jobsProcessed = processed
@@ -152,6 +169,8 @@ type alias Acc =
     , queueDrops     : Dict Int Int    -- qid → drop count
     , queueTimeSum   : Dict Int Float  -- qid → Σ(length × dt) for time-average
     , queueLastTick  : Dict Int Int    -- qid → tick of last length change
+    , haltedStart    : Dict Int Int    -- nid → tick of most recent WorkerHalted
+    , haltedTicks    : Dict Int Int    -- nid → cumulative halted ticks
     }
 
 
@@ -167,6 +186,8 @@ emptyAcc =
     , queueDrops     = Dict.empty
     , queueTimeSum   = Dict.empty
     , queueLastTick  = Dict.empty
+    , haltedStart    = Dict.empty
+    , haltedTicks    = Dict.empty
     }
 
 
@@ -222,6 +243,23 @@ step sourceIds sinkIds evt acc =
                 | queueDrops =
                     Dict.update qid (Just << (+) 1 << Maybe.withDefault 0) acc.queueDrops
             }
+
+        WorkerHalted (NodeID nid) ->
+            { acc | haltedStart = Dict.insert nid t acc.haltedStart }
+
+        WorkerResumed (NodeID nid) ->
+            case Dict.get nid acc.haltedStart of
+                Nothing ->
+                    acc
+
+                Just startT ->
+                    { acc
+                        | haltedStart = Dict.remove nid acc.haltedStart
+                        , haltedTicks =
+                            Dict.update nid
+                                (Just << (+) (t - startT) << Maybe.withDefault 0)
+                                acc.haltedTicks
+                    }
 
         _ ->
             acc

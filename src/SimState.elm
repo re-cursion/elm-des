@@ -1,6 +1,7 @@
 module SimState exposing
     ( SimState
     , init
+    , isInterruptActive
     , nextJobID
     , getNode
     , getQueue
@@ -22,7 +23,7 @@ import EventTime exposing (EventTime(..))
 import Id exposing (JobID(..), LockID, NodeID(..), QueueID(..))
 import Job exposing (Job)
 import Lock exposing (LockState)
-import Node exposing (NodeData)
+import Node exposing (NodeData, NodeKind(..))
 import Queue exposing (Queue)
 import Random
 
@@ -52,6 +53,17 @@ init seed =
     , eventLog   = []
     , nextID     = 1
     }
+
+
+isInterruptActive : SimState -> Bool
+isInterruptActive state =
+    Dict.values state.nodes
+        |> List.any
+            (\node ->
+                case node.kind of
+                    Worker cfg -> cfg.halted
+                    _          -> False
+            )
 
 
 nextJobID : SimState -> ( JobID, SimState )
