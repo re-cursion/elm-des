@@ -1488,12 +1488,18 @@ Goal: a working, correctly simulating engine with a plain-text / table UI.
 - [x] `Interrupt` events pre-scheduled at t=150–170 and t=350–370; interactive "Interrupt"
       button in playback controls for manual one-shot interrupts
 - [x] Ensemble runner uses the currently selected preset and parameters
-- [x] 81 tests: TestQueue, TestJob, TestEngine (Dispatcher + Interrupt + preemption + RandomChoice),
-      TestServiceTime, TestMetrics (interrupt-aware utilisation, JobMetrics), TestEnsemble
+- [x] 95 tests: TestQueue, TestJob, TestEngine (Dispatcher + Interrupt + preemption + RandomChoice),
+      TestServiceTime, TestMetrics (interrupt-aware utilisation, JobMetrics), TestEnsemble,
+      TestScenarioConfig (decode + toTopologyAndState)
 
 **Still pending from Phase 3:**
-- [ ] `ScenarioConfig` Elm type + `Json.Decode` pipeline (all scenarios are Elm code only)
-- [ ] `Theme2D` type — vocabulary, sprite sources, background; canvas hard-codes shapes/colours
+- [x] `ScenarioConfig` Elm type + `Json.Decode` pipeline — `ScenarioConfig.elm` decodes the
+      full JSON schema (meta, nodes, queues, edges, locks, scheduledEvents) and
+      `toTopologyAndState` builds `(Topology, SimState)` from a decoded config;
+      10 tests in `TestScenarioConfig.elm`
+- [x] `Theme2D` type — `Theme.elm` defines `SpriteSource`, `Background`, `ParallaxLayer`,
+      `JobVisual`, `JobVisualState`, `Vocabulary`, and `Theme2D msg`; canvas still
+      hard-codes shapes/colours (a full default theme is Phase 4)
 - [x] `Job.history : List (EventTime, EventType)` — stamped at 6 transitions (source arrival,
       ServiceStarted, ServiceComplete, SignoffRequested, SignoffComplete, sink arrival); store copy
       used in `tryPullFromQueue` so history survives queue residence; completed jobs move to
