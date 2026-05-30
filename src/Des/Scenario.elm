@@ -434,6 +434,8 @@ viewControls model =
                     , style "margin-right" "0.25rem"
                     ]
                     [ text "Interrupt" ]
+
+        isoActive = model.renderMode == Isometric
     in
     div [ style "margin-bottom" "0.5rem" ]
         (List.map speedBtn speeds
@@ -452,6 +454,16 @@ viewControls model =
                , span
                     [ style "margin-left" "1rem", style "color" "#888", style "font-size" "0.85em" ]
                     [ text ("t = " ++ String.fromInt (eventTime2Int model.simState.clock)) ]
+               , span [ style "margin" "0 0.5rem" ] [ text "|" ]
+               , button
+                    [ onClick ToggleRenderMode
+                    , style "padding" "0.25rem 0.75rem"
+                    , style "border" "1px solid #999"
+                    , style "cursor" "pointer"
+                    , style "background" (if isoActive then "#333" else "#eee")
+                    , style "color" (if isoActive then "#fff" else "#333")
+                    ]
+                    [ text (if isoActive then "Iso" else "2D") ]
                ]
         )
 
@@ -498,22 +510,87 @@ viewCanvas model =
         w = model.layout.svgW
         h = model.layout.svgH
     in
-    div [ style "margin-bottom" "0.5rem" ]
-        [ Svg.svg
-            [ SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
-            , SA.width (String.fromFloat w)
-            , SA.height (String.fromFloat h)
-            , style "border" "1px solid #ccc"
-            , style "border-radius" "4px"
-            , style "background" "#f8f9fa"
-            , style "display" "block"
+    case model.renderMode of
+        Flat2D ->
+            div [ style "margin-bottom" "0.5rem" ]
+                [ Svg.svg
+                    [ SA.viewBox ("0 0 " ++ String.fromFloat w ++ " " ++ String.fromFloat h)
+                    , SA.width (String.fromFloat w)
+                    , SA.height (String.fromFloat h)
+                    , style "border" "1px solid #ccc"
+                    , style "border-radius" "4px"
+                    , style "background" "#f8f9fa"
+                    , style "display" "block"
+                    ]
+                    (svgDefs
+                        :: svgEdges model.config model.layout
+                        ++ svgQueues model.config model.simState metrics model.layout
+                        ++ svgNodes model.config model.simState metrics model.layout
+                        ++ viewTransitDots model.jobAnims
+                    )
+                ]
+
+        Isometric ->
+            let
+                isoW = w * 2
+                isoH = h * 2
+                baseCam = model.camera
+                cam0 = { baseCam | origin = ( 0, 0 ) }
+                ( projCx, projCy ) =
+                    Camera.project cam0
+                        { x = (w / 2) / 48.0, y = 0, z = (h / 2) / 48.0 }
+                cam = { baseCam | origin = ( isoW / 2 - projCx, isoH / 2 - projCy ) }
+                jobPositions =
+                    Dict.map (\_ a -> ( a.x, a.y )) model.jobAnims
+            in
+            div [ style "margin-bottom" "0.5rem" ]
+                [ viewCameraControls model.camera
+                , Svg.svg
+                    [ SA.viewBox ("0 0 " ++ String.fromFloat isoW ++ " " ++ String.fromFloat isoH)
+                    , SA.width (String.fromFloat isoW)
+                    , SA.height (String.fromFloat isoH)
+                    , style "border" "1px solid #444"
+                    , style "border-radius" "4px"
+                    , style "background" "#0f0f1a"
+                    , style "display" "block"
+                    ]
+                    [ IsoRenderer.viewScene cam model.config model.simState metrics jobPositions ]
+                ]
+
+
+viewCameraControls : Camera -> Html Msg
+viewCameraControls cam =
+    let
+        btn msg lbl =
+            button
+                [ onClick msg
+                , style "margin-right" "0.25rem"
+                , style "padding" "0.2rem 0.6rem"
+                , style "border" "1px solid #999"
+                , style "cursor" "pointer"
+                , style "background" "#eee"
+                ]
+                [ text lbl ]
+    in
+    div [ style "margin-bottom" "0.25rem", style "font-size" "0.8em" ]
+        [ btn (SpinCamera (-pi / 8)) "◀ spin"
+        , btn (SpinCamera  (pi / 8)) "spin ▶"
+        , span [ style "margin" "0 0.4rem" ] [ text "|" ]
+        , btn (TiltCamera  0.05) "tilt ▲"
+        , btn (TiltCamera -0.05) "tilt ▼"
+        , span [ style "margin" "0 0.4rem" ] [ text "|" ]
+        , btn (ZoomCamera 1.25) "zoom +"
+        , btn (ZoomCamera 0.8)  "zoom −"
+        , span [ style "margin" "0 0.4rem" ] [ text "|" ]
+        , btn ResetCamera "reset"
+        , span
+            [ style "margin-left" "0.75rem", style "color" "#888" ]
+            [ text
+                ("spin=" ++ String.fromInt (round (cam.spinAngle * 180 / pi))
+                ++ "° tilt=" ++ String.fromInt (round (cam.tiltAngle * 180 / pi))
+                ++ "° zoom=" ++ String.fromInt (round cam.scale)
+                )
             ]
-            (svgDefs
-                :: svgEdges model.config model.layout
-                ++ svgQueues model.config model.simState metrics model.layout
-                ++ svgNodes model.config model.simState metrics model.layout
-                ++ viewTransitDots model.jobAnims
-            )
         ]
 
 
