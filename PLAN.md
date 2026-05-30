@@ -1549,14 +1549,21 @@ kind of effect the simulation is meant to make visible.
 
 Theming is purely cosmetic — the engine does not change.
 
-- [ ] `SpriteSource` and `Background` types in `Theme.elm`
+- [x] `SpriteSource` and `Background` types in `Theme.elm` (done in Phase 3)
 - [ ] `expanse` theme (flat 2D): ship sprite sheet (4 priorities × frames), station-interior background image, hex-panel SVG pattern for queue slots
 - [ ] `supermarket` theme (flat 2D): trolley sprite sheet, supermarket background
 - [ ] `software-team` theme (flat 2D): ticket sprites, office background
-- [ ] elm-presentation integration: expose `Des.Scenario` component API,
-      wire up `Dict SlideId Model` in the presentation model,
-      add `des-scenario` slide kind to elm-presentation JSON schema
-- [ ] Add `z` and `h` layout fields to all scenario JSONs, ready for Phase 5 isometric renderer
+- [x] elm-presentation integration: `Des.Scenario` component API in `src/Des/Scenario.elm` —
+      `init : ScenarioConfig -> (Model, Cmd Msg)`, `update`, `view`, `subscriptions`;
+      generic SVG canvas driven by config `x`/`y` positions (no hardcoded preset layouts);
+      playback controls + scrubber embedded in `view`; 11 tests in `TestDesScenario.elm`
+- [x] `z` and `h` layout fields added to `ScenarioConfig.NodeSpec` and `QueueSpec`
+      (defaults z=0.0, h=1.0 for nodes / h=0.3 for queues); Phase 5 isometric renderer
+      can read them without a config schema change
+- [x] Bundled scenario JSON strings in `src/Scenarios.elm` — `singleWorker`, `twoParallel`,
+      `threePipeline`; same topologies as the legacy hardcoded presets, now expressed as
+      `ScenarioConfig` JSON usable via `ScenarioConfig.decode` or browser flags
+- [x] 106 tests passing
 
 ### Phase 5 — Rotatable Isometric Renderer
 

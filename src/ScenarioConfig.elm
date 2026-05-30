@@ -52,6 +52,8 @@ type alias NodeSpec =
     , label : String
     , x     : Float
     , y     : Float
+    , z     : Float   -- isometric depth (ignored by 2D renderer)
+    , h     : Float   -- visual height in world units (1.0 = standard)
     }
 
 
@@ -77,6 +79,8 @@ type alias QueueSpec =
     , label      : String
     , x          : Float
     , y          : Float
+    , z          : Float   -- isometric depth (ignored by 2D renderer)
+    , h          : Float   -- visual height in world units (0.3 = flat platform)
     , capacity   : Int
     , discipline : Queue.Discipline
     , overflow   : Queue.Overflow
@@ -140,12 +144,14 @@ nodeDecoder =
     D.field "kind" D.string
         |> D.andThen
             (\kind ->
-                D.map5 NodeSpec
+                D.map7 NodeSpec
                     (D.field "id"    D.int)
                     (nodeKindDecoder kind)
                     (D.field "label" D.string)
                     (D.oneOf [ D.field "x" D.float, D.succeed 0.0 ])
                     (D.oneOf [ D.field "y" D.float, D.succeed 0.0 ])
+                    (D.oneOf [ D.field "z" D.float, D.succeed 0.0 ])
+                    (D.oneOf [ D.field "h" D.float, D.succeed 1.0 ])
             )
 
 
@@ -190,14 +196,32 @@ nodeKindDecoder kind =
 
 queueDecoder : Decoder QueueSpec
 queueDecoder =
-    D.map7 QueueSpec
+    D.map8
+        (\id label x y z capacity disc ov ->
+            { id         = id
+            , label      = label
+            , x          = x
+            , y          = y
+            , z          = z
+            , h          = 1.0   -- default; overridden below
+            , capacity   = capacity
+            , discipline = disc
+            , overflow   = ov
+            }
+        )
         (D.field "id"       D.int)
         (D.field "label"    D.string)
         (D.oneOf [ D.field "x" D.float, D.succeed 0.0 ])
         (D.oneOf [ D.field "y" D.float, D.succeed 0.0 ])
+        (D.oneOf [ D.field "z" D.float, D.succeed 0.0 ])
         (D.field "capacity" D.int)
         (D.oneOf [ D.field "discipline" disciplineDecoder, D.succeed Queue.FIFO ])
         (D.oneOf [ D.field "overflow"   overflowDecoder,   D.succeed Queue.Block ])
+        |> D.andThen
+            (\spec ->
+                D.oneOf [ D.field "h" D.float, D.succeed 0.3 ]
+                    |> D.map (\h -> { spec | h = h })
+            )
 
 
 edgeDecoder : Decoder EdgeSpec
