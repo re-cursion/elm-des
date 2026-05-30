@@ -95,7 +95,7 @@ buildParallel arrivalRate serviceTime queueCap pctHigh dispatchRule =
         src  = { arrivalRate = arrivalRate, jobPriority = Normal, highPriorityFraction = pctHigh, jobLabel = "Job" }
         wrkA = { serviceTime = serviceTime, preemptive = False, signoff = Nothing,                      halted = False }
         wrkB = { serviceTime = serviceTime, preemptive = False, signoff = Just (LockID "inspector"), halted = False }
-        disp = { rule = dispatchRule, roundRobinIndex = 0 }
+        disp = { rule = dispatchRule, roundRobinIndex = 0, serviceTime = Nothing }
 
         inspector =
             Lock.newLock

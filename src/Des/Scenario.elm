@@ -133,7 +133,7 @@ init cfg =
 
 isoCamera : Layout -> Camera
 isoCamera layout =
-    { spinAngle = pi / 4
+    { spinAngle = 0
     , tiltAngle = pi / 6
     , scale     = 48.0
     , origin    = ( layout.svgW / 2, layout.svgH / 2 )
@@ -321,8 +321,15 @@ update msg model =
                                 else
                                     model.simState
 
+                            -- Subtract only the clock ticks actually consumed, not the
+                            -- requested simUnits. If no event fell within the deadline the
+                            -- clock stays put; keeping the remainder lets the accumulator
+                            -- grow across frames until it covers the gap to the next event.
+                            clockDelta =
+                                eventTime2Int newState.clock - eventTime2Int model.simState.clock
+
                             newEventsChron =
-                                if simUnits > 0 then
+                                if clockDelta > 0 then
                                     List.take
                                         (List.length newState.eventLog - oldLogLen)
                                         newState.eventLog
@@ -335,7 +342,7 @@ update msg model =
                         in
                         ( { model
                             | simState    = newState
-                            , accumulator = newAcc - toFloat simUnits
+                            , accumulator = newAcc - toFloat clockDelta
                             , jobAnims    = newAnims
                           }
                         , Cmd.none

@@ -26,7 +26,7 @@ type alias Camera =
 
 defaultCamera : Camera
 defaultCamera =
-    { spinAngle = pi / 4
+    { spinAngle = 0
     , tiltAngle = pi / 6
     , scale     = 48.0
     , origin    = ( 400.0, 300.0 )

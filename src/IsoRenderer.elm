@@ -15,6 +15,7 @@ import Dict
 import Id exposing (NodeID(..), QueueID(..))
 import Job exposing (Priority(..))
 import Metrics exposing (NodeMetrics, QueueMetrics, SystemMetrics)
+import Node exposing (NodeState(..))
 import Queue
 import ScenarioConfig exposing (EdgeSpec, NodeSpec, QueueSpec, ScenarioConfig)
 import SceneObject exposing (BoxStyle, SceneObject, SceneShape(..), renderAll)
@@ -64,8 +65,24 @@ viewScene cam cfg state metrics jobPositions =
 
         allObjects =
             edgeObjects ++ nodeObjects ++ queueObjects
+
+        nodeLabels =
+            cfg.nodes
+                |> List.map (\spec ->
+                    let nm = Dict.get spec.id metrics.nodes |> Maybe.withDefault emptyNodeMetrics
+                    in nodeLabel cam spec nm state
+                )
+
+        queueLabels =
+            cfg.queues
+                |> List.map (\spec ->
+                    let len = SimState.getQueue (QueueID spec.id) state
+                                |> Maybe.map Queue.size
+                                |> Maybe.withDefault 0
+                    in queueLabel cam spec len
+                )
     in
-    Svg.g [] (renderAll cam allObjects ++ jobDots)
+    Svg.g [] (renderAll cam allObjects ++ jobDots ++ nodeLabels ++ queueLabels)
 
 
 -- ── Node → SceneObjects ───────────────────────────────────────────────────────
@@ -215,6 +232,64 @@ arcMid a b =
     , y = max a.y b.y + 0.2
     , z = (a.z + b.z) / 2.0
     }
+
+
+-- ── Labels ────────────────────────────────────────────────────────────────────
+
+nodeLabel : Camera -> NodeSpec -> NodeMetrics -> SimState -> Svg msg
+nodeLabel cam spec nm state =
+    let
+        pos    = { x = spec.x / 48.0 + 0.5, y = spec.h + 0.25, z = spec.y / 48.0 + 0.5 }
+        ( sx, sy ) = Camera.project cam pos
+
+        mNode  = SimState.getNode (NodeID spec.id) state
+        stateStr =
+            case mNode |> Maybe.map .state of
+                Just (Busy _ _)      -> "busy"
+                Just (Blocked _)     -> "blocked"
+                Just (Signoff _ _)   -> "signoff"
+                Just (Preempted _ _) -> "preempt"
+                Just (Paused _)      -> "paused"
+                Just Idle            -> "idle"
+                Nothing              -> ""
+
+        utilPct = String.fromInt (round (nm.utilisation * 100)) ++ "%"
+        subLine =
+            if stateStr == "" then ""
+            else stateStr ++ " " ++ utilPct
+    in
+    Svg.g []
+        [ isoText sx (sy - 4)  "#fff"  "11" "bold"   spec.label
+        , isoText sx (sy + 10) "#aaa"  "9"  "normal" subLine
+        ]
+
+
+queueLabel : Camera -> QueueSpec -> Int -> Svg msg
+queueLabel cam spec len =
+    let
+        barW   = toFloat spec.capacity * 0.4
+        pos    = { x = spec.x / 48.0 + barW / 2, y = spec.h + 0.25, z = spec.y / 48.0 + 0.3 }
+        ( sx, sy ) = Camera.project cam pos
+        fillStr = String.fromInt len ++ "/" ++ String.fromInt spec.capacity
+    in
+    Svg.g []
+        [ isoText sx (sy - 4)  "#fff" "10" "bold"   spec.label
+        , isoText sx (sy + 8)  "#aaa" "9"  "normal" fillStr
+        ]
+
+
+isoText : Float -> Float -> String -> String -> String -> String -> Svg msg
+isoText sx sy colour size weight content =
+    Svg.text_
+        [ SA.x          (String.fromFloat sx)
+        , SA.y          (String.fromFloat sy)
+        , SA.textAnchor "middle"
+        , SA.fontSize   size
+        , SA.fontWeight weight
+        , SA.fontFamily "monospace"
+        , SA.fill       colour
+        ]
+        [ Svg.text content ]
 
 
 -- ── Job dot ───────────────────────────────────────────────────────────────────

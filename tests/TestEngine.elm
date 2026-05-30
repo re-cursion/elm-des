@@ -118,7 +118,7 @@ forkJoinScenario =
             { serviceTime = Deterministic 3, preemptive = False, signoff = Nothing, halted = False }
 
         dispCfg =
-            { rule = ShortestQueue, roundRobinIndex = 0 }
+            { rule = ShortestQueue, roundRobinIndex = 0, serviceTime = Nothing }
 
         mkQ =
             Queue.empty { capacity = 10, discipline = Queue.FIFO, overflow = Queue.Block }
@@ -335,7 +335,7 @@ suite =
                         ( topo, _ ) = forkJoinScenario
 
                         dispCfg =
-                            { rule = RandomChoice, roundRobinIndex = 0 }
+                            { rule = RandomChoice, roundRobinIndex = 0, serviceTime = Nothing }
 
                         workerCfg =
                             { serviceTime = Deterministic 3, preemptive = False, signoff = Nothing, halted = False }

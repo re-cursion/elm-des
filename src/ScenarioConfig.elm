@@ -69,7 +69,9 @@ type NodeSpecKind
         , signoff     : Maybe String
         }
     | DispatcherSpec
-        { rule : DispatchRule }
+        { rule        : DispatchRule
+        , serviceTime : Maybe ServiceTime
+        }
     | SinkSpec
     | InterruptSpec
 
@@ -177,9 +179,10 @@ nodeKindDecoder kind =
                 (D.oneOf [ D.field "signoff" (D.nullable D.string), D.succeed Nothing ])
 
         "dispatcher" ->
-            D.map
-                (\rule -> DispatcherSpec { rule = rule })
+            D.map2
+                (\rule st -> DispatcherSpec { rule = rule, serviceTime = st })
                 (D.oneOf [ D.field "rule" dispatchRuleDecoder, D.succeed ShortestQueue ])
+                (D.oneOf [ D.map Just (D.field "serviceTime" serviceTimeDecoder), D.succeed Nothing ])
 
         "sink" ->
             D.succeed SinkSpec
@@ -468,7 +471,7 @@ nodeSpecToData spec =
                 )
 
         DispatcherSpec c ->
-            Ok (makeDispatcher spec.label { rule = c.rule, roundRobinIndex = 0 })
+            Ok (makeDispatcher spec.label { rule = c.rule, roundRobinIndex = 0, serviceTime = c.serviceTime })
 
         SinkSpec ->
             Ok (makeSink spec.label)

@@ -44,7 +44,8 @@ type alias WorkerConfig =
 
 type alias DispatcherConfig =
     { rule            : DispatchRule
-    , roundRobinIndex : Int   -- mutable index for RoundRobin routing
+    , roundRobinIndex : Int            -- mutable index for RoundRobin routing
+    , serviceTime     : Maybe ServiceTime  -- Nothing = instant routing
     }
 
 

@@ -11,7 +11,7 @@ import EventTime exposing (EventTime(..), addTimes, compareTimes)
 import Id exposing (JobID(..), LockID(..), NodeID(..), QueueID(..))
 import Job exposing (Job, Priority(..), priorityRank, newJob)
 import Lock exposing (AcquireResult(..))
-import Node exposing (DispatchRule(..), NodeData, NodeKind(..), NodeState(..))
+import Node exposing (DispatcherConfig, DispatchRule(..), NodeData, NodeKind(..), NodeState(..))
 import Queue exposing (EnqueueResult(..))
 import Random
 import ServiceTime
@@ -206,6 +206,27 @@ onServiceComplete topo nid jid state =
                         _ ->
                             state
 
+                Dispatcher cfg ->
+                    case node.state of
+                        Busy currentJid _ ->
+                            if currentJid /= jid then
+                                state
+                            else
+                                case SimState.getJob jid state of
+                                    Nothing ->
+                                        state
+
+                                    Just job ->
+                                        let
+                                            stamped =
+                                                { job | history = ( state.clock, ServiceComplete nid jid ) :: job.history }
+                                        in
+                                        SimState.putJob stamped state
+                                            |> dispatchRoute topo nid node cfg stamped
+
+                        _ ->
+                            state
+
                 _ ->
                     state
 
@@ -317,6 +338,48 @@ releaseJobToOutputs topo nid jid node state =
 pushToOutputs : Topology -> NodeID -> Job -> SimState -> SimState
 pushToOutputs topo nid job state =
     tryQueues topo job (Topology.nodeOutputs nid topo) state
+
+
+{-| Like tryQueues but returns whether the job was actually forwarded.
+Returns False only when every candidate queue returned WasBlocked. -}
+tryRoute : Topology -> Job -> List QueueID -> SimState -> ( Bool, SimState )
+tryRoute topo job qids state =
+    case qids of
+        [] ->
+            ( False, state )
+
+        qid :: rest ->
+            case SimState.getQueue qid state of
+                Nothing ->
+                    tryRoute topo job rest state
+
+                Just queue ->
+                    case Queue.enqueue job queue of
+                        Enqueued queue1 ->
+                            ( True
+                            , state
+                                |> SimState.putQueue qid queue1
+                                |> SimState.logEvent (event state.clock (JobEnqueued qid job.id))
+                                |> wakeConsumers topo qid
+                            )
+
+                        WasBlocked ->
+                            tryRoute topo job rest state
+
+                        DroppedExisting droppedID queue1 ->
+                            ( True
+                            , state
+                                |> SimState.putQueue qid queue1
+                                |> SimState.logEvent (event state.clock (JobDropped qid droppedID))
+                                |> SimState.logEvent (event state.clock (JobEnqueued qid job.id))
+                                |> wakeConsumers topo qid
+                            )
+
+                        DroppedIncoming ->
+                            ( True
+                            , state
+                                |> SimState.logEvent (event state.clock (JobDropped qid job.id))
+                            )
 
 
 tryQueues : Topology -> Job -> List QueueID -> SimState -> SimState
@@ -488,6 +551,34 @@ tryPullFromQueue topo nid node qid state =
                     SimState.putQueue qid queue1 state
                         |> SimState.logEvent (event state.clock (JobDequeued qid nid job.id))
                         |> startService topo nid { node | state = Idle } job
+                        -- A slot opened in qid; wake any dispatcher blocked waiting to push there
+                        |> wakeBlockedProducers topo qid
+
+
+{-| When a queue slot opens up, retry any Dispatcher that was blocked trying
+to push to that queue. -}
+wakeBlockedProducers : Topology -> QueueID -> SimState -> SimState
+wakeBlockedProducers topo freedQid state =
+    Dict.foldl
+        (\rawNid node acc ->
+            case ( node.state, node.kind ) of
+                ( Blocked jid, Dispatcher cfg ) ->
+                    if List.member freedQid (Topology.nodeOutputs (NodeID rawNid) topo) then
+                        case SimState.getJob jid acc of
+                            Nothing ->
+                                acc
+
+                            Just job ->
+                                dispatchRoute topo (NodeID rawNid) node cfg job acc
+
+                    else
+                        acc
+
+                _ ->
+                    acc
+        )
+        state
+        state.nodes
 
 
 startService : Topology -> NodeID -> NodeData -> Job -> SimState -> SimState
@@ -514,54 +605,31 @@ startService topo nid node job state =
                 |> SimState.scheduleEvent (event completionTime (ServiceComplete nid stamped.id))
 
         Dispatcher cfg ->
-            -- Route job, persist updated config (RoundRobin index), then pull next
-            let
-                outputs =
-                    Topology.nodeOutputs nid topo
-
-                byLength qid =
-                    SimState.getQueue qid state |> Maybe.map Queue.size |> Maybe.withDefault 0
-
-                ( orderedQueues, updatedCfg, seed1 ) =
-                    case cfg.rule of
-                        ShortestQueue ->
-                            ( List.sortBy byLength outputs, cfg, state.seed )
-
-                        RoundRobin ->
-                            let
-                                n   = max 1 (List.length outputs)
-                                idx = modBy n cfg.roundRobinIndex
-                            in
-                            ( List.drop idx outputs ++ List.take idx outputs
-                            , { cfg | roundRobinIndex = cfg.roundRobinIndex + 1 }
-                            , state.seed
-                            )
-
-                        RandomChoice ->
-                            let
-                                n                = max 1 (List.length outputs)
-                                ( idx, newSeed ) = Random.step (Random.int 0 (n - 1)) state.seed
-                            in
-                            ( List.drop idx outputs ++ List.take idx outputs
-                            , cfg
-                            , newSeed
-                            )
-
-                state1 =
-                    tryQueues topo job orderedQueues { state | seed = seed1 }
-
-                idleNode =
-                    { node | kind = Dispatcher updatedCfg, state = Idle }
-
-                state2 =
-                    SimState.putNode nid idleNode state1
-            in
-            case Topology.nodeInput nid topo of
-                Just inputQid ->
-                    tryPullFromQueue topo nid idleNode inputQid state2
-
+            case cfg.serviceTime of
                 Nothing ->
-                    state2
+                    -- Instant routing: decide and forward the job right now
+                    dispatchRoute topo nid node cfg job state
+
+                Just st ->
+                    -- Timed dispatch: hold the job in Busy for the service duration
+                    let
+                        stamped =
+                            { job | history = ( state.clock, ServiceStarted nid job.id ) :: job.history }
+
+                        ( duration, seed1 ) =
+                            ServiceTime.sample st stamped.size state.seed
+
+                        completionTime =
+                            addTimes state.clock (EventTime duration)
+
+                        busyNode =
+                            { node | state = Busy stamped.id completionTime }
+                    in
+                    { state | seed = seed1 }
+                        |> SimState.putJob stamped
+                        |> SimState.putNode nid busyNode
+                        |> SimState.logEvent (event state.clock (ServiceStarted nid stamped.id))
+                        |> SimState.scheduleEvent (event completionTime (ServiceComplete nid stamped.id))
 
         Sink ->
             let
@@ -574,6 +642,66 @@ startService topo nid node job state =
 
         _ ->
             state
+
+
+-- ── Dispatcher routing ───────────────────────────────────────────────────────
+
+{-| Compute output order, route job, persist updated cfg, then become idle. -}
+dispatchRoute : Topology -> NodeID -> NodeData -> DispatcherConfig -> Job -> SimState -> SimState
+dispatchRoute topo nid node cfg job state =
+    let
+        outputs =
+            Topology.nodeOutputs nid topo
+
+        byLength qid =
+            SimState.getQueue qid state |> Maybe.map Queue.size |> Maybe.withDefault 0
+
+        ( orderedQueues, updatedCfg, seed1 ) =
+            case cfg.rule of
+                ShortestQueue ->
+                    ( List.sortBy byLength outputs, cfg, state.seed )
+
+                RoundRobin ->
+                    let
+                        n   = max 1 (List.length outputs)
+                        idx = modBy n cfg.roundRobinIndex
+                    in
+                    ( List.drop idx outputs ++ List.take idx outputs
+                    , { cfg | roundRobinIndex = cfg.roundRobinIndex + 1 }
+                    , state.seed
+                    )
+
+                RandomChoice ->
+                    let
+                        n                = max 1 (List.length outputs)
+                        ( idx, newSeed ) = Random.step (Random.int 0 (n - 1)) state.seed
+                    in
+                    ( List.drop idx outputs ++ List.take idx outputs
+                    , cfg
+                    , newSeed
+                    )
+
+        ( routed, state1 ) =
+            tryRoute topo job orderedQueues { state | seed = seed1 }
+    in
+    if routed then
+        let
+            routedNode =
+                { node | kind = Dispatcher updatedCfg, state = Idle }
+
+            state2 =
+                SimState.putNode nid routedNode state1
+        in
+        case Topology.nodeInput nid topo of
+            Just inputQid ->
+                tryPullFromQueue topo nid routedNode inputQid state2
+
+            Nothing ->
+                state2
+
+    else
+        -- All output queues full; hold the job and wait for a slot to open
+        SimState.putNode nid { node | kind = Dispatcher updatedCfg, state = Blocked job.id } state1
 
 
 -- ── Utility ───────────────────────────────────────────────────────────────────
