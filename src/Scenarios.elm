@@ -157,52 +157,56 @@ belterShipyard =
     """{
   "meta": {
     "id": "belter-shipyard",
-    "title": "Belter Shipyard — Tycho Station",
+    "title": "Tycho Station — Ship Docking",
     "theme": "expanse",
     "seed": 42,
     "speed": 10
   },
   "nodes": [
     { "id": 1, "kind": "source",
-      "label": "Docking Collar", "x": 80, "y": 160, "h": 1.0,
-      "arrivalRate": 0.28, "priority": "normal", "highPriorityFraction": 0.25 },
+      "label": "Arrivals", "x": 70, "y": 170, "h": 1.0,
+      "arrivalRate": 0.32, "priority": "normal", "highPriorityFraction": 0.25 },
     { "id": 2, "kind": "dispatcher",
-      "label": "Shift Coord", "x": 255, "y": 160, "h": 1.3,
+      "label": "Traffic Control", "x": 290, "y": 170, "h": 1.4,
       "rule": "shortest-queue",
-      "serviceTime": { "kind": "deterministic", "ticks": 3 } },
+      "serviceTime": { "kind": "deterministic", "ticks": 2 } },
     { "id": 3, "kind": "worker",
-      "label": "Welder", "x": 465, "y": 80, "h": 1.4,
-      "serviceTime": { "kind": "log-normal", "mu": 1.6, "sigma": 0.6 },
+      "label": "Dock A", "x": 560, "y": 60, "h": 1.2,
+      "serviceTime": { "kind": "log-normal", "mu": 1.6, "sigma": 0.5 },
       "preemptive": true },
     { "id": 4, "kind": "worker",
-      "label": "Systems Tech", "x": 465, "y": 240, "h": 1.4,
-      "serviceTime": { "kind": "log-normal", "mu": 1.8, "sigma": 0.5 },
-      "preemptive": false, "signoff": "pressure-cert" },
-    { "id": 5, "kind": "sink",
-      "label": "Airlock Out", "x": 690, "y": 160, "h": 1.0 },
-    { "id": 6, "kind": "interrupt",
-      "label": "Bosmang", "x": 750, "y": 20, "h": 0.5 }
+      "label": "Dock B", "x": 560, "y": 170, "h": 1.2,
+      "serviceTime": { "kind": "log-normal", "mu": 1.6, "sigma": 0.5 },
+      "preemptive": true },
+    { "id": 5, "kind": "worker",
+      "label": "Dock C", "x": 560, "y": 280, "h": 1.2,
+      "serviceTime": { "kind": "log-normal", "mu": 1.6, "sigma": 0.5 },
+      "preemptive": true },
+    { "id": 6, "kind": "sink",
+      "label": "Departure", "x": 790, "y": 170, "h": 1.0 },
+    { "id": 7, "kind": "interrupt",
+      "label": "Bosmang", "x": 290, "y": 30, "h": 0.5 }
   ],
   "queues": [
-    { "id": 1, "label": "Intake",  "x": 170, "y": 160, "h": 0.4, "capacity": 6, "discipline": "fifo", "overflow": "block" },
-    { "id": 2, "label": "Weld Q", "x": 355, "y": 80,  "h": 0.4, "capacity": 4, "discipline": "fifo", "overflow": "block" },
-    { "id": 3, "label": "Sys Q",  "x": 355, "y": 240, "h": 0.4, "capacity": 4, "discipline": "fifo", "overflow": "block" },
-    { "id": 4, "label": "Airlock","x": 590, "y": 160, "h": 0.4, "capacity": 3, "discipline": "fifo", "overflow": "block" }
+    { "id": 1, "label": "Holding Pattern", "x": 180, "y": 170, "h": 0.4, "capacity": 8, "discipline": "priority-fifo", "overflow": "block" },
+    { "id": 2, "label": "Bay A", "x": 430, "y": 60,  "h": 0.4, "capacity": 1, "discipline": "fifo", "overflow": "block" },
+    { "id": 3, "label": "Bay B", "x": 430, "y": 170, "h": 0.4, "capacity": 1, "discipline": "fifo", "overflow": "block" },
+    { "id": 4, "label": "Bay C", "x": 430, "y": 280, "h": 0.4, "capacity": 1, "discipline": "fifo", "overflow": "block" },
+    { "id": 5, "label": "Outbound", "x": 680, "y": 170, "h": 0.4, "capacity": 6, "discipline": "fifo", "overflow": "block" }
   ],
   "edges": [
     { "from": "node:1",  "to": "queue:1" },
     { "from": "queue:1", "to": "node:2"  },
     { "from": "node:2",  "to": "queue:2" },
     { "from": "node:2",  "to": "queue:3" },
+    { "from": "node:2",  "to": "queue:4" },
     { "from": "queue:2", "to": "node:3"  },
     { "from": "queue:3", "to": "node:4"  },
-    { "from": "node:3",  "to": "queue:4" },
-    { "from": "node:4",  "to": "queue:4" },
-    { "from": "queue:4", "to": "node:5"  }
-  ],
-  "locks": [
-    { "id": "pressure-cert", "label": "Pressure Cert", "capacity": 1,
-      "serviceTime": { "kind": "deterministic", "ticks": 8 } }
+    { "from": "queue:4", "to": "node:5"  },
+    { "from": "node:3",  "to": "queue:5" },
+    { "from": "node:4",  "to": "queue:5" },
+    { "from": "node:5",  "to": "queue:5" },
+    { "from": "queue:5", "to": "node:6"  }
   ],
   "scheduledEvents": [
     { "at": 200, "kind": "boss-meeting", "duration": 35, "label": "Bosmang All-Hands" },

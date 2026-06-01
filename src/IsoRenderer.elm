@@ -239,6 +239,31 @@ nodeToObjects theme spec metrics mState =
             , shape  = Box style
             }
 
+        -- Dock berths get a landing pad that reads free (green) vs occupied
+        -- (amber), so "wait until a dock is free" is visible at a glance.
+        isDock =
+            case spec.kind of
+                ScenarioConfig.WorkerSpec _ -> True
+                _                           -> False
+
+        pad =
+            if isDock then
+                let
+                    padColour =
+                        case mState of
+                            Just Idle       -> "#1B5E20"   -- free: green
+                            Nothing         -> "#1B5E20"
+                            Just (Paused _) -> "#3E2723"   -- meeting: dim
+                            _               -> "#B26A00"   -- occupied: amber
+                in
+                [ { pos    = { x = pos.x, y = 0.004, z = pos.z }
+                  , height = 0.0
+                  , shape  = FlatTile { w = 1.4, d = 1.4, fill = padColour }
+                  }
+                ]
+            else
+                []
+
         -- A small beacon mast on the back corner whose colour signals live
         -- state (busy / blocked / signoff / preempted / paused).
         beacon =
@@ -273,7 +298,7 @@ nodeToObjects theme spec metrics mState =
                 }
             }
     in
-    [ node, utilBar ] ++ beacon
+    pad ++ [ node, utilBar ] ++ beacon
 
 
 {-| State-signalling beacon colour for a worker node. `Idle` (and non-worker

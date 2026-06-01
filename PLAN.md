@@ -1558,10 +1558,16 @@ Theming is purely cosmetic — the engine does not change.
       dark-purple sink, and an interrupt badge that shows the node label uppercased + ⚡ when
       active. Still pending: ship sprite sheet (4 priorities × frames), station-interior
       background image, hex-panel SVG pattern for queue slots.
-- [x] `belterShipyard` scenario in `src/Scenarios.elm` + dropdown entry in `Demo.elm`:
-      Docking Collar → Intake → Shift Coord (dispatcher, shortest-queue) → Weld Q / Sys Q →
-      Welder / Systems Tech (pressure-cert sign-off) → Airlock → Airlock Out. Two scheduled
+- [x] `belterShipyard` scenario in `src/Scenarios.elm` + dropdown entry in `Demo.elm` —
+      **redesigned as a ship-docking station** (the natural fit for the limited-resource story):
+      Arrivals (source) → Holding Pattern (priority-fifo, cap 8) → Traffic Control (dispatcher,
+      shortest-queue) → Bay A/B/C (cap-1 approach lanes) → Dock A/B/C (three identical preemptive
+      worker docks — the *limited number of docks*) → Outbound (cap 6) → Departure (sink). When all
+      docks are occupied the dispatcher blocks and the Holding Pattern backs up, modelling ships
+      waiting for a free dock; Traffic Control then assigns each waiting ship to a free bay. Critical
+      warships sort to the front of Holding (priority-fifo) and can preempt a busy dock. Two scheduled
       Bosmang all-hands interrupts at t=200 (35 ticks) and t=500 (25 ticks). `theme: "expanse"`.
+      Sign-off lock dropped (story is dock-occupancy, not inspection).
 - [ ] `supermarket` theme (flat 2D): trolley sprite sheet, supermarket background
 - [ ] `software-team` theme (flat 2D): ticket sprites, office background
 - [x] elm-presentation integration: `Des.Scenario` component API in `src/Des/Scenario.elm` —
@@ -1626,6 +1632,9 @@ Theming is purely cosmetic — the engine does not change.
 - [x] **Interrupt alert banner**: `IsoRenderer.viewAlert` draws a red "⚡ BOSMANG ALL-HANDS —
       WORKERS DOWN TOOLS ⚡" banner across the top of the iso canvas while `SimState.isInterruptActive`,
       drawn over the scene. Showcases the boss-node mechanic the plan calls out as the primary demo beat.
+- [x] **Dock landing pads**: worker (dock) nodes render a `FlatTile` landing pad that reads free
+      (green) when `Idle` vs occupied (amber) otherwise / dim during a meeting — makes "wait until a
+      dock is free" legible at a glance, supporting the redesigned docking scenario.
 
 **Box / coordinate convention (Phase 5 cleanup).** Originally `renderBox` treated `pos` as the
 bottom-left-front *corner* and grew +w/+d from it, while edges (`resolveEndpoint`) and job dots

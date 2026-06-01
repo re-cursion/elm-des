@@ -7,6 +7,7 @@ import Expect
 import Id exposing (NodeID(..), QueueID(..))
 import Metrics
 import ScenarioConfig exposing (NodeSpecKind(..))
+import Scenarios
 import Test exposing (Test, describe, test)
 
 
@@ -298,5 +299,43 @@ suite =
                                             )
                             in
                             Expect.equal True hasInterruptAt50
+            ]
+        , describe "bundled scenarios"
+            [ test "all four bundled scenarios decode" <|
+                \_ ->
+                    Expect.all
+                        [ \_ -> Expect.ok (ScenarioConfig.decode Scenarios.singleWorker)
+                        , \_ -> Expect.ok (ScenarioConfig.decode Scenarios.twoParallel)
+                        , \_ -> Expect.ok (ScenarioConfig.decode Scenarios.threePipeline)
+                        , \_ -> Expect.ok (ScenarioConfig.decode Scenarios.belterShipyard)
+                        ]
+                        ()
+
+            , test "belterShipyard: 7 nodes, 5 queues, 3 docks, 1 dispatcher, builds topology" <|
+                \_ ->
+                    case ScenarioConfig.decode Scenarios.belterShipyard of
+                        Err e ->
+                            Expect.fail (Debug.toString e)
+
+                        Ok cfg ->
+                            let
+                                isWorker n =
+                                    case n.kind of
+                                        WorkerSpec _ -> True
+                                        _            -> False
+
+                                isDispatcher n =
+                                    case n.kind of
+                                        DispatcherSpec _ -> True
+                                        _                -> False
+                            in
+                            Expect.all
+                                [ \c -> Expect.equal 7 (List.length c.nodes)
+                                , \c -> Expect.equal 5 (List.length c.queues)
+                                , \c -> Expect.equal 3 (List.length (List.filter isWorker c.nodes))
+                                , \c -> Expect.equal 1 (List.length (List.filter isDispatcher c.nodes))
+                                , \c -> Expect.ok (ScenarioConfig.toTopologyAndState c)
+                                ]
+                                cfg
             ]
         ]
