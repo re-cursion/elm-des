@@ -463,8 +463,66 @@ view model =
     div [ style "font-family" "monospace" ]
         [ viewControls model
         , viewCanvas model
+        , viewMetrics model
         , viewScrubber model
         ]
+
+
+{-| Compact system dashboard: completed jobs, throughput, cycle-time
+percentiles, total drops, and per-worker utilisation. Pure function of the
+metrics (which are a single-pass scan of the event log). -}
+viewMetrics : Model -> Html Msg
+viewMetrics model =
+    let
+        m = Metrics.compute model.simState
+        isExp = model.config.meta.theme == "expanse"
+
+        completed = List.length m.jobs
+        dropped = Dict.foldl (\_ q acc -> acc + q.dropCount) 0 m.queues
+
+        chipBg     = if isExp then "#161b22" else "#f0f0f0"
+        chipBorder = if isExp then "#30363d" else "#ccc"
+        valColor   = if isExp then "#e6edf3" else "#222"
+        lblColor   = if isExp then "#8b949e" else "#666"
+
+        roundTo d x =
+            let f = toFloat (10 ^ d)
+            in String.fromFloat (toFloat (round (x * f)) / f)
+
+        chip lbl val =
+            div
+                [ style "padding" "0.3rem 0.6rem"
+                , style "background" chipBg
+                , style "border" ("1px solid " ++ chipBorder)
+                , style "border-radius" "4px"
+                , style "min-width" "62px"
+                ]
+                [ div [ style "font-size" "0.62rem", style "color" lblColor, style "text-transform" "uppercase", style "letter-spacing" "0.5px" ] [ text lbl ]
+                , div [ style "font-size" "0.95rem", style "font-weight" "bold", style "color" valColor ] [ text val ]
+                ]
+
+        utilChips =
+            model.config.nodes
+                |> List.filterMap
+                    (\n ->
+                        case n.kind of
+                            WorkerSpec _ ->
+                                let u = Dict.get n.id m.nodes |> Maybe.map .utilisation |> Maybe.withDefault 0.0
+                                in Just (chip n.label (String.fromInt (round (u * 100)) ++ "%"))
+
+                            _ ->
+                                Nothing
+                    )
+    in
+    div [ style "display" "flex", style "gap" "0.4rem", style "flex-wrap" "wrap", style "margin-top" "0.5rem" ]
+        ([ chip "Completed" (String.fromInt completed)
+         , chip "Thrpt/t" (roundTo 3 m.throughput)
+         , chip "Avg cyc" (roundTo 1 m.avgCycleTime)
+         , chip "p95 cyc" (roundTo 1 m.p95CycleTime)
+         , chip "Dropped" (String.fromInt dropped)
+         ]
+            ++ utilChips
+        )
 
 
 viewControls : Model -> Html Msg
