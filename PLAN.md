@@ -1580,7 +1580,9 @@ Theming is purely cosmetic — the engine does not change.
 
 - [x] `Camera` type and `project` function (Y-axis rotation + isometric projection) — `Camera.elm`
 - [x] `SceneObject` / `SceneShape` types (`Box`, `FlatTile`, `BillboardSprite`, `DirectionalSprite`, `Path3D`, `RawSvg`) — `SceneObject.elm`
-- [x] Painter's-algorithm depth sort (`sortByDepth` via `Camera.depthOf`, recomputed each frame)
+- [x] Painter's-algorithm depth sort (`sortByDepth` via `Camera.depthOf`, recomputed each frame) —
+      covered by `TestSceneObject` (farthest-first ordering, height-independence, stability under a
+      full 2π spin); `Camera.project`/`depthOf` covered by `TestCamera`. 121 tests passing.
 - [x] `Box` face rendering: **all four side walls + top, depth-sorted farthest-first** so the
       box stays solid at any `spinAngle` (see "Box convention" below). x-walls use `leftColour`,
       z-walls use `rightColour`, top uses `topColour`.
