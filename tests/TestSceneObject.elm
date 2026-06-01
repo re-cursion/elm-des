@@ -12,7 +12,7 @@ tile : Float -> Float -> Float -> SceneObject ()
 tile x y z =
     { pos = { x = x, y = y, z = z }
     , height = 0.0
-    , shape = FlatTile { w = 1.0, d = 1.0, fill = "#000" }
+    , shape = FlatTile { w = 1.0, d = 1.0, fill = "#000", stroke = "#000" }
     }
 
 

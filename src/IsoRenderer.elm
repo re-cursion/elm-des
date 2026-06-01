@@ -201,6 +201,8 @@ floorTiles cfg =
         isExpanse = cfg.meta.theme == "expanse"
         ( fillA, fillB ) =
             if isExpanse then ( "#0D1B2A", "#111F2E" ) else ( "#37474F", "#2E3C44" )
+        seam =
+            if isExpanse then "#060E18" else "#26333A"
     in
     List.concatMap
         (\col ->
@@ -209,8 +211,9 @@ floorTiles cfg =
                     { pos    = { x = toFloat col + 0.5, y = 0.001, z = toFloat row + 0.5 }
                     , height = 0.0
                     , shape  = FlatTile
-                        { w = 1.0, d = 1.0
+                        { w = 0.96, d = 0.96
                         , fill = if modBy 2 (col + row) == 0 then fillA else fillB
+                        , stroke = seam
                         }
                     }
                 )
@@ -262,16 +265,16 @@ nodeToObjects theme spec metrics mState =
         pad =
             if isDock then
                 let
-                    padColour =
+                    ( padColour, padRim ) =
                         case mState of
-                            Just Idle       -> "#1B5E20"   -- free: green
-                            Nothing         -> "#1B5E20"
-                            Just (Paused _) -> "#3E2723"   -- meeting: dim
-                            _               -> "#B26A00"   -- occupied: amber
+                            Just Idle       -> ( "#1B5E20", "#43A047" )   -- free: green
+                            Nothing         -> ( "#1B5E20", "#43A047" )
+                            Just (Paused _) -> ( "#3E2723", "#5D4037" )   -- meeting: dim
+                            _               -> ( "#B26A00", "#FFB300" )   -- occupied: amber
                 in
                 [ { pos    = { x = pos.x, y = 0.004, z = pos.z }
                   , height = 0.0
-                  , shape  = FlatTile { w = 1.4, d = 1.4, fill = padColour }
+                  , shape  = FlatTile { w = 1.4, d = 1.4, fill = padColour, stroke = padRim }
                   }
                 ]
             else

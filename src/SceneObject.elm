@@ -31,7 +31,7 @@ type alias SceneObject msg =
 
 type SceneShape msg
     = Box BoxStyle
-    | FlatTile { w : Float, d : Float, fill : String }
+    | FlatTile { w : Float, d : Float, fill : String, stroke : String }
     | BillboardSprite { source : SpriteSource, w : Float, h : Float }
     | DirectionalSprite { source : SpriteSource, directions : Int, w : Float, h : Float }
     | Path3D { points : List { x : Float, y : Float, z : Float }, stroke : String, width : Float }
@@ -74,8 +74,8 @@ renderOne cam obj =
         Box style ->
             renderBox cam obj.pos obj.height style
 
-        FlatTile { w, d, fill } ->
-            [ renderFlatTile cam obj.pos w d fill ]
+        FlatTile { w, d, fill, stroke } ->
+            [ renderFlatTile cam obj.pos w d fill stroke ]
 
         BillboardSprite { source, w, h } ->
             [ renderBillboard cam base source w h ]
@@ -152,8 +152,8 @@ renderBox cam pos height style =
 -- ── FlatTile ──────────────────────────────────────────────────────────────────
 
 {-| Flat ground quad centred on `pos`, spanning ±w/2 in x and ±d/2 in z. -}
-renderFlatTile : Camera -> { x : Float, y : Float, z : Float } -> Float -> Float -> String -> Svg msg
-renderFlatTile cam pos w d fill =
+renderFlatTile : Camera -> { x : Float, y : Float, z : Float } -> Float -> Float -> String -> String -> Svg msg
+renderFlatTile cam pos w d fill stroke =
     let
         hw  = w / 2
         hd  = d / 2
@@ -162,12 +162,13 @@ renderFlatTile cam pos w d fill =
         pz  = { pos | x = pos.x - hw, z = pos.z + hd }
         pxz = { pos | x = pos.x + hw, z = pos.z + hd }
     in
-    polygon4
+    quad
         (Camera.project cam p)
         (Camera.project cam px)
         (Camera.project cam pxz)
         (Camera.project cam pz)
         fill
+        stroke
 
 
 -- ── Billboard ─────────────────────────────────────────────────────────────────
@@ -306,7 +307,14 @@ renderPath3D cam points stroke width =
 -- ── Helpers ───────────────────────────────────────────────────────────────────
 
 polygon4 : ( Float, Float ) -> ( Float, Float ) -> ( Float, Float ) -> ( Float, Float ) -> String -> Svg msg
-polygon4 ( ax, ay ) ( bx, by ) ( cx, cy ) ( dx, dy ) colour =
+polygon4 a b c d colour =
+    quad a b c d colour colour
+
+
+{-| Like `polygon4` but with a distinct stroke colour (used for floor-panel
+seams and pad rims). -}
+quad : ( Float, Float ) -> ( Float, Float ) -> ( Float, Float ) -> ( Float, Float ) -> String -> String -> Svg msg
+quad ( ax, ay ) ( bx, by ) ( cx, cy ) ( dx, dy ) fill stroke =
     let
         pts =
             [ String.fromFloat ax, ",", String.fromFloat ay, " "
@@ -317,8 +325,8 @@ polygon4 ( ax, ay ) ( bx, by ) ( cx, cy ) ( dx, dy ) colour =
     in
     Svg.polygon
         [ SA.points (String.concat pts)
-        , SA.fill   colour
-        , SA.stroke colour
+        , SA.fill   fill
+        , SA.stroke stroke
         , SA.strokeWidth "0.5"
         ]
         []
