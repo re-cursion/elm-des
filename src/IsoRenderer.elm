@@ -114,10 +114,15 @@ viewScene cam cfg state metrics jobPositions =
         queueLabels =
             cfg.queues
                 |> List.map (\spec ->
-                    let len = SimState.getQueue (QueueID spec.id) state
+                    let
+                        len = SimState.getQueue (QueueID spec.id) state
                                 |> Maybe.map Queue.size
                                 |> Maybe.withDefault 0
-                    in queueLabel cam spec len
+                        drops = Dict.get spec.id metrics.queues
+                                |> Maybe.map .dropCount
+                                |> Maybe.withDefault 0
+                    in
+                    queueLabel cam spec len drops
                 )
     in
     Svg.g []
@@ -540,17 +545,24 @@ nodeLabel cam spec nm state =
         ]
 
 
-queueLabel : Camera -> QueueSpec -> Int -> Svg msg
-queueLabel cam spec len =
+queueLabel : Camera -> QueueSpec -> Int -> Int -> Svg msg
+queueLabel cam spec len drops =
     let
         pos    = { x = spec.x / 48.0, y = spec.h + 0.25, z = spec.y / 48.0 }
         ( sx, sy ) = Camera.project cam pos
         fillStr = String.fromInt len ++ "/" ++ String.fromInt spec.capacity
+        dropLine =
+            if drops > 0 then
+                [ isoText sx (sy + 19) "#ff6b6b" "9" "bold" ("⚠ " ++ String.fromInt drops ++ " dropped") ]
+            else
+                []
     in
     Svg.g []
-        [ isoText sx (sy - 4)  "#fff" "10" "bold"   spec.label
-        , isoText sx (sy + 8)  "#aaa" "9"  "normal" fillStr
-        ]
+        ([ isoText sx (sy - 4)  "#fff" "10" "bold"   spec.label
+         , isoText sx (sy + 8)  "#aaa" "9"  "normal" fillStr
+         ]
+            ++ dropLine
+        )
 
 
 isoText : Float -> Float -> String -> String -> String -> String -> Svg msg
