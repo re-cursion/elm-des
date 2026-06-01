@@ -32,6 +32,8 @@ import Svg.Attributes as SA
 type alias JobIsoData =
     { x        : Float
     , y        : Float
+    , tx       : Float
+    , ty       : Float
     , inTransit : Bool
     , priority  : Priority
     }
@@ -87,6 +89,17 @@ viewScene cam cfg state metrics jobPositions =
                             dotY = if job.inTransit then 1.2 else 0.6
                             ( sx, sy )   = Camera.project cam { x = wx, y = dotY, z = wz }
                             ( shx, shy ) = Camera.project cam { x = wx, y = 0.02, z = wz }
+                            -- Heading: project a look-ahead point (the current
+                            -- target) and take the screen-space bearing so the
+                            -- ship banks toward where it is actually flying.
+                            ( tsx, tsy ) = Camera.project cam { x = job.tx / 48.0, y = dotY, z = job.ty / 48.0 }
+                            dsx = tsx - sx
+                            dsy = tsy - sy
+                            heading =
+                                if dsx * dsx + dsy * dsy > 1.0 then
+                                    atan2 dsy dsx * 180.0 / pi + 90.0
+                                else
+                                    0.0
                         in
                         [ Svg.ellipse
                             [ SA.cx (String.fromFloat shx)
@@ -97,7 +110,7 @@ viewScene cam cfg state metrics jobPositions =
                             , SA.opacity "0.22"
                             ]
                             []
-                        , jobDot theme sx sy job.priority
+                        , jobDot theme sx sy heading job.priority
                         ]
                     )
 
@@ -606,10 +619,10 @@ isoText sx sy colour size weight content =
 
 -- ── Job dot ───────────────────────────────────────────────────────────────────
 
-jobDot : String -> Float -> Float -> Priority -> Svg msg
-jobDot theme sx sy prio =
+jobDot : String -> Float -> Float -> Float -> Priority -> Svg msg
+jobDot theme sx sy heading prio =
     if theme == "expanse" then
-        shipMarker sx sy prio
+        shipMarker sx sy heading prio
     else
         Svg.circle
             [ SA.cx   (String.fromFloat sx)
@@ -623,12 +636,13 @@ jobDot theme sx sy prio =
 {-| A small angular hull silhouette (bow up) used as the job marker in the
 expanse theme — an asset-free vector ship in place of a plain dot. Critical
 jobs get a brighter outline so warships stand out in transit. -}
-shipMarker : Float -> Float -> Priority -> Svg msg
-shipMarker sx sy prio =
+shipMarker : Float -> Float -> Float -> Priority -> Svg msg
+shipMarker sx sy heading prio =
     let
         pt dx dy =
             String.fromFloat (sx + dx) ++ "," ++ String.fromFloat (sy + dy)
 
+        -- Hull authored bow-up; rotated about (sx,sy) to face the heading.
         hull =
             String.join " "
                 [ pt 0 -7, pt 4 -1, pt 3 5, pt -3 5, pt -4 -1 ]
@@ -637,8 +651,13 @@ shipMarker sx sy prio =
             case prio of
                 Critical -> "#ffe08a"
                 _        -> "#0b1b26"
+
+        rot =
+            "rotate(" ++ String.fromFloat heading
+                ++ " " ++ String.fromFloat sx
+                ++ " " ++ String.fromFloat sy ++ ")"
     in
-    Svg.g []
+    Svg.g [ SA.transform rot ]
         [ Svg.polygon
             [ SA.points hull
             , SA.fill   (priorityColor prio)

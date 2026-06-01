@@ -633,6 +633,8 @@ viewCanvas model =
                             in
                             { x        = a.x
                             , y        = a.y
+                            , tx       = a.tx
+                            , ty       = a.ty
                             , inTransit = dx * dx + dy * dy > 4.0 || not (List.isEmpty a.waypoints)
                             , priority  = a.priority
                             }
