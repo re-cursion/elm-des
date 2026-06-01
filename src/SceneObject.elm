@@ -15,7 +15,7 @@ Every visible element is a SceneObject. The renderer:
 -}
 
 import Camera exposing (Camera)
-import Theme exposing (SpriteSource)
+import Theme exposing (SpriteSource(..))
 import Svg exposing (Svg)
 import Svg.Attributes as SA
 
@@ -77,11 +77,11 @@ renderOne cam obj =
         FlatTile { w, d, fill } ->
             [ renderFlatTile cam obj.pos w d fill ]
 
-        BillboardSprite { w, h } ->
-            [ renderBillboard base w h ]
+        BillboardSprite { source, w, h } ->
+            [ renderBillboard cam base source w h ]
 
-        DirectionalSprite { directions, w, h } ->
-            [ renderDirectional cam base directions w h ]
+        DirectionalSprite { source, directions, w, h } ->
+            [ renderDirectional cam base source directions w h ]
 
         Path3D { points, stroke, width } ->
             [ renderPath3D cam points stroke width ]
@@ -92,50 +92,75 @@ renderOne cam obj =
 
 -- ── Box ───────────────────────────────────────────────────────────────────────
 
-{-| Draw three faces of an isometric box: top, left, right.
-The box floor corner is at `pos`; it rises `height` units in the Y direction. -}
+{-| Draw a solid isometric box. `pos` is the CENTRE of the footprint at floor
+level; the box extends ±w/2 in x, ±d/2 in z, and rises `height` in y.
+
+All four side walls are drawn, depth-sorted farthest-first, then the top face
+last. This keeps the box solid (never see-through) at any `spinAngle`. The two
+x-facing walls use `leftColour`, the two z-facing walls use `rightColour`, so a
+given physical face keeps its shade as the camera rotates. -}
 renderBox : Camera -> { x : Float, y : Float, z : Float } -> Float -> BoxStyle -> List (Svg msg)
 renderBox cam pos height style =
     let
-        w  = style.w
-        d  = style.d
-        -- Eight corners of the box in world space
-        -- Floor: pos (origin), +x, +z, +x+z
-        -- Ceiling: same + height in y
-        p  = pos
-        px = { pos | x = pos.x + w }
-        pz = { pos | z = pos.z + d }
-        pxz = { pos | x = pos.x + w, z = pos.z + d }
-        py  = { pos | y = pos.y + height }
-        pxy = { pos | x = pos.x + w, y = pos.y + height }
-        pzy = { pos | z = pos.z + d, y = pos.y + height }
-        pxzy = { pos | x = pos.x + w, z = pos.z + d, y = pos.y + height }
+        hw = style.w / 2
+        hd = style.d / 2
+        x0 = pos.x - hw
+        x1 = pos.x + hw
+        z0 = pos.z - hd
+        z1 = pos.z + hd
+        y0 = pos.y
+        y1 = pos.y + height
 
-        sp    = Camera.project cam p
-        spx   = Camera.project cam px
-        spz   = Camera.project cam pz
-        spxz  = Camera.project cam pxz
-        spy   = Camera.project cam py
-        spxy  = Camera.project cam pxy
-        spzy  = Camera.project cam pzy
-        spxzy = Camera.project cam pxzy
+        -- 8 corners: cXYZ where X/Y/Z ∈ {0,1} select low/high on that axis
+        c000 = { x = x0, y = y0, z = z0 }
+        c100 = { x = x1, y = y0, z = z0 }
+        c001 = { x = x0, y = y0, z = z1 }
+        c101 = { x = x1, y = y0, z = z1 }
+        c010 = { x = x0, y = y1, z = z0 }
+        c110 = { x = x1, y = y1, z = z0 }
+        c011 = { x = x0, y = y1, z = z1 }
+        c111 = { x = x1, y = y1, z = z1 }
 
-        top   = polygon4 spy  spxy spxzy spzy  style.topColour
-        left  = polygon4 sp   spy  spzy  spz   style.leftColour
-        right = polygon4 spx  spxz spxzy spxy  style.rightColour
+        prj = Camera.project cam
+
+        faceDepth corners =
+            List.sum (List.map (Camera.depthOf cam) corners) / 4
+
+        -- Four side walls: (depth-key, rendered polygon)
+        walls =
+            [ ( faceDepth [ c000, c100, c110, c010 ]
+              , polygon4 (prj c000) (prj c100) (prj c110) (prj c010) style.rightColour )  -- −z wall
+            , ( faceDepth [ c001, c101, c111, c011 ]
+              , polygon4 (prj c001) (prj c101) (prj c111) (prj c011) style.rightColour )  -- +z wall
+            , ( faceDepth [ c000, c001, c011, c010 ]
+              , polygon4 (prj c000) (prj c001) (prj c011) (prj c010) style.leftColour )   -- −x wall
+            , ( faceDepth [ c100, c101, c111, c110 ]
+              , polygon4 (prj c100) (prj c101) (prj c111) (prj c110) style.leftColour )   -- +x wall
+            ]
+
+        sortedWalls =
+            walls
+                |> List.sortBy Tuple.first
+                |> List.reverse
+                |> List.map Tuple.second
+
+        top = polygon4 (prj c010) (prj c110) (prj c111) (prj c011) style.topColour
     in
-    [ left, right, top ]
+    sortedWalls ++ [ top ]
 
 
 -- ── FlatTile ──────────────────────────────────────────────────────────────────
 
+{-| Flat ground quad centred on `pos`, spanning ±w/2 in x and ±d/2 in z. -}
 renderFlatTile : Camera -> { x : Float, y : Float, z : Float } -> Float -> Float -> String -> Svg msg
 renderFlatTile cam pos w d fill =
     let
-        p   = pos
-        px  = { pos | x = pos.x + w }
-        pz  = { pos | z = pos.z + d }
-        pxz = { pos | x = pos.x + w, z = pos.z + d }
+        hw  = w / 2
+        hd  = d / 2
+        p   = { pos | x = pos.x - hw, z = pos.z - hd }
+        px  = { pos | x = pos.x + hw, z = pos.z - hd }
+        pz  = { pos | x = pos.x - hw, z = pos.z + hd }
+        pxz = { pos | x = pos.x + hw, z = pos.z + hd }
     in
     polygon4
         (Camera.project cam p)
@@ -147,23 +172,109 @@ renderFlatTile cam pos w d fill =
 
 -- ── Billboard ─────────────────────────────────────────────────────────────────
 
-renderBillboard : ( Float, Float ) -> Float -> Float -> Svg msg
-renderBillboard ( sx, sy ) w h =
-    Svg.rect
-        [ SA.x      (String.fromFloat (sx - w / 2))
-        , SA.y      (String.fromFloat (sy - h))
-        , SA.width  (String.fromFloat w)
-        , SA.height (String.fromFloat h)
-        , SA.fill   "#888"
-        , SA.opacity "0.7"
-        ]
-        []
+renderBillboard : Camera -> ( Float, Float ) -> SpriteSource -> Float -> Float -> Svg msg
+renderBillboard cam ( sx, sy ) source w h =
+    let
+        pxW = w * cam.scale
+        pxH = h * cam.scale
+    in
+    case source of
+        VectorSymbol id ->
+            Svg.node "use"
+                [ SA.xlinkHref ("#" ++ id)
+                , SA.x      (String.fromFloat (sx - pxW / 2))
+                , SA.y      (String.fromFloat (sy - pxH))
+                , SA.width  (String.fromFloat pxW)
+                , SA.height (String.fromFloat pxH)
+                ]
+                []
+
+        RasterImage url ->
+            Svg.image
+                [ SA.xlinkHref url
+                , SA.x      (String.fromFloat (sx - pxW / 2))
+                , SA.y      (String.fromFloat (sy - pxH))
+                , SA.width  (String.fromFloat pxW)
+                , SA.height (String.fromFloat pxH)
+                , SA.preserveAspectRatio "xMidYMid meet"
+                ]
+                []
+
+        SpriteSheet spec ->
+            -- Nested SVG with a viewBox acts as a clip: shows only the frame region.
+            Svg.svg
+                [ SA.x       (String.fromFloat (sx - pxW / 2))
+                , SA.y       (String.fromFloat (sy - pxH))
+                , SA.width   (String.fromFloat pxW)
+                , SA.height  (String.fromFloat pxH)
+                , SA.viewBox (String.join " "
+                    [ String.fromInt spec.x, String.fromInt spec.y
+                    , String.fromInt spec.w, String.fromInt spec.h
+                    ])
+                ]
+                [ Svg.image
+                    [ SA.xlinkHref spec.url
+                    , SA.x "0", SA.y "0"
+                    , SA.width  (String.fromInt (spec.x + spec.w + 9999))
+                    , SA.height (String.fromInt (spec.y + spec.h + 9999))
+                    ]
+                    []
+                ]
 
 
-renderDirectional : Camera -> ( Float, Float ) -> Int -> Float -> Float -> Svg msg
-renderDirectional _ ( sx, sy ) _ w h =
-    -- Placeholder — real impl stamps a <use> with the right sprite-sheet frame
-    renderBillboard ( sx, sy ) w h
+renderDirectional : Camera -> ( Float, Float ) -> SpriteSource -> Int -> Float -> Float -> Svg msg
+renderDirectional cam ( sx, sy ) source directions w h =
+    let
+        pxW = w * cam.scale
+        pxH = h * cam.scale
+        -- Map spin angle (unbounded) → frame index in [0, directions)
+        norm     = cam.spinAngle - (2 * pi * toFloat (floor (cam.spinAngle / (2 * pi))))
+        frameIdx = modBy (max 1 directions) (round (norm / (2 * pi) * toFloat directions))
+    in
+    case source of
+        VectorSymbol id ->
+            Svg.node "use"
+                [ SA.xlinkHref ("#" ++ id)
+                , SA.x      (String.fromFloat (sx - pxW / 2))
+                , SA.y      (String.fromFloat (sy - pxH))
+                , SA.width  (String.fromFloat pxW)
+                , SA.height (String.fromFloat pxH)
+                ]
+                []
+
+        RasterImage url ->
+            Svg.image
+                [ SA.xlinkHref url
+                , SA.x      (String.fromFloat (sx - pxW / 2))
+                , SA.y      (String.fromFloat (sy - pxH))
+                , SA.width  (String.fromFloat pxW)
+                , SA.height (String.fromFloat pxH)
+                , SA.preserveAspectRatio "xMidYMid meet"
+                ]
+                []
+
+        SpriteSheet spec ->
+            -- Frames arranged horizontally: frame N starts at x = spec.x + N * spec.w
+            let frameX = spec.x + frameIdx * spec.w
+            in
+            Svg.svg
+                [ SA.x       (String.fromFloat (sx - pxW / 2))
+                , SA.y       (String.fromFloat (sy - pxH))
+                , SA.width   (String.fromFloat pxW)
+                , SA.height  (String.fromFloat pxH)
+                , SA.viewBox (String.join " "
+                    [ String.fromInt frameX, String.fromInt spec.y
+                    , String.fromInt spec.w,  String.fromInt spec.h
+                    ])
+                ]
+                [ Svg.image
+                    [ SA.xlinkHref spec.url
+                    , SA.x "0", SA.y "0"
+                    , SA.width  (String.fromInt (spec.x + directions * spec.w + 9999))
+                    , SA.height (String.fromInt (spec.y + spec.h + 9999))
+                    ]
+                    []
+                ]
 
 
 -- ── Path3D ────────────────────────────────────────────────────────────────────

@@ -25,9 +25,10 @@ loadScenario key =
     let
         json =
             case key of
-                "two-parallel"   -> Scenarios.twoParallel
-                "three-pipeline" -> Scenarios.threePipeline
-                _                -> Scenarios.singleWorker
+                "two-parallel"    -> Scenarios.twoParallel
+                "three-pipeline"  -> Scenarios.threePipeline
+                "belter-shipyard" -> Scenarios.belterShipyard
+                _                 -> Scenarios.singleWorker
     in
     case ScenarioConfig.decode json of
         Ok cfg ->
@@ -75,6 +76,7 @@ view model =
                 [ option [ value "single-worker"   ] [ text "M/M/1 Single Worker" ]
                 , option [ value "two-parallel"    ] [ text "M/M/2 Two Parallel" ]
                 , option [ value "three-pipeline"  ] [ text "Three-stage Pipeline" ]
+                , option [ value "belter-shipyard" ] [ text "Belter Shipyard (expanse)" ]
                 ]
             ]
         , Html.map ScenarioMsg (Scenario.view model.scenario)

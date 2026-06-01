@@ -2,6 +2,7 @@ module Scenarios exposing
     ( singleWorker
     , twoParallel
     , threePipeline
+    , belterShipyard
     )
 
 {-| Bundled scenario JSON strings.
@@ -147,5 +148,64 @@ threePipeline =
   "scheduledEvents": [
     { "at": 150, "kind": "boss-meeting", "duration": 20, "label": "Interrupt 1" },
     { "at": 350, "kind": "boss-meeting", "duration": 20, "label": "Interrupt 2" }
+  ]
+}"""
+
+
+belterShipyard : String
+belterShipyard =
+    """{
+  "meta": {
+    "id": "belter-shipyard",
+    "title": "Belter Shipyard — Tycho Station",
+    "theme": "expanse",
+    "seed": 42,
+    "speed": 10
+  },
+  "nodes": [
+    { "id": 1, "kind": "source",
+      "label": "Docking Collar", "x": 80, "y": 160, "h": 1.0,
+      "arrivalRate": 0.28, "priority": "normal", "highPriorityFraction": 0.25 },
+    { "id": 2, "kind": "dispatcher",
+      "label": "Shift Coord", "x": 255, "y": 160, "h": 1.3,
+      "rule": "shortest-queue",
+      "serviceTime": { "kind": "deterministic", "ticks": 3 } },
+    { "id": 3, "kind": "worker",
+      "label": "Welder", "x": 465, "y": 80, "h": 1.4,
+      "serviceTime": { "kind": "log-normal", "mu": 1.6, "sigma": 0.6 },
+      "preemptive": true },
+    { "id": 4, "kind": "worker",
+      "label": "Systems Tech", "x": 465, "y": 240, "h": 1.4,
+      "serviceTime": { "kind": "log-normal", "mu": 1.8, "sigma": 0.5 },
+      "preemptive": false, "signoff": "pressure-cert" },
+    { "id": 5, "kind": "sink",
+      "label": "Airlock Out", "x": 690, "y": 160, "h": 1.0 },
+    { "id": 6, "kind": "interrupt",
+      "label": "Bosmang", "x": 750, "y": 20, "h": 0.5 }
+  ],
+  "queues": [
+    { "id": 1, "label": "Intake",  "x": 170, "y": 160, "h": 0.4, "capacity": 6, "discipline": "fifo", "overflow": "block" },
+    { "id": 2, "label": "Weld Q", "x": 355, "y": 80,  "h": 0.4, "capacity": 4, "discipline": "fifo", "overflow": "block" },
+    { "id": 3, "label": "Sys Q",  "x": 355, "y": 240, "h": 0.4, "capacity": 4, "discipline": "fifo", "overflow": "block" },
+    { "id": 4, "label": "Airlock","x": 590, "y": 160, "h": 0.4, "capacity": 3, "discipline": "fifo", "overflow": "block" }
+  ],
+  "edges": [
+    { "from": "node:1",  "to": "queue:1" },
+    { "from": "queue:1", "to": "node:2"  },
+    { "from": "node:2",  "to": "queue:2" },
+    { "from": "node:2",  "to": "queue:3" },
+    { "from": "queue:2", "to": "node:3"  },
+    { "from": "queue:3", "to": "node:4"  },
+    { "from": "node:3",  "to": "queue:4" },
+    { "from": "node:4",  "to": "queue:4" },
+    { "from": "queue:4", "to": "node:5"  }
+  ],
+  "locks": [
+    { "id": "pressure-cert", "label": "Pressure Cert", "capacity": 1,
+      "serviceTime": { "kind": "deterministic", "ticks": 8 } }
+  ],
+  "scheduledEvents": [
+    { "at": 200, "kind": "boss-meeting", "duration": 35, "label": "Bosmang All-Hands" },
+    { "at": 500, "kind": "boss-meeting", "duration": 25, "label": "Safety Briefing" }
   ]
 }"""

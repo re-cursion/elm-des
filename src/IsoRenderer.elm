@@ -1,8 +1,10 @@
 module IsoRenderer exposing
     ( viewScene
+    , viewStarfield
+    , JobIsoData
     , nodeToObjects
     , queueToObjects
-    , edgeToObject
+    , edgeToObjects
     )
 
 {-| Converts simulation state + ScenarioConfig into SceneObjects, then renders
@@ -24,6 +26,16 @@ import Svg exposing (Svg)
 import Svg.Attributes as SA
 
 
+-- ── Types ─────────────────────────────────────────────────────────────────────
+
+type alias JobIsoData =
+    { x        : Float
+    , y        : Float
+    , inTransit : Bool
+    , priority  : Priority
+    }
+
+
 -- ── Scene entry point ─────────────────────────────────────────────────────────
 
 viewScene
@@ -31,16 +43,18 @@ viewScene
     -> ScenarioConfig
     -> SimState
     -> SystemMetrics
-    -> Dict.Dict Int ( Float, Float )
+    -> Dict.Dict Int JobIsoData
     -> Svg msg
 viewScene cam cfg state metrics jobPositions =
     let
+        theme = cfg.meta.theme
+
         nodeObjects =
             cfg.nodes
                 |> List.concatMap
                     (\spec ->
                         let nm = Dict.get spec.id metrics.nodes |> Maybe.withDefault emptyNodeMetrics
-                        in nodeToObjects spec nm
+                        in nodeToObjects theme spec nm
                     )
 
         queueObjects =
@@ -48,20 +62,40 @@ viewScene cam cfg state metrics jobPositions =
                 |> List.concatMap
                     (\spec ->
                         let
-                            qm  = Dict.get spec.id metrics.queues |> Maybe.withDefault emptyQueueMetrics
-                            len = SimState.getQueue (QueueID spec.id) state
-                                    |> Maybe.map Queue.size
-                                    |> Maybe.withDefault 0
+                            qm    = Dict.get spec.id metrics.queues |> Maybe.withDefault emptyQueueMetrics
+                            prios = SimState.getQueue (QueueID spec.id) state
+                                        |> Maybe.map (\q -> List.map .priority (Queue.toList q))
+                                        |> Maybe.withDefault []
                         in
-                        queueToObjects spec len qm
+                        queueToObjects theme spec prios qm
                     )
 
         edgeObjects =
-            cfg.edges |> List.filterMap (edgeToObject cfg)
+            cfg.edges |> List.concatMap (edgeToObjects cfg)
 
         jobDots =
             Dict.values jobPositions
-                |> List.map (\( sx, sy ) -> jobDot sx sy)
+                |> List.concatMap
+                    (\job ->
+                        let
+                            wx   = job.x / 48.0
+                            wz   = job.y / 48.0
+                            dotY = if job.inTransit then 1.2 else 0.6
+                            ( sx, sy )   = Camera.project cam { x = wx, y = dotY, z = wz }
+                            ( shx, shy ) = Camera.project cam { x = wx, y = 0.02, z = wz }
+                        in
+                        [ Svg.ellipse
+                            [ SA.cx (String.fromFloat shx)
+                            , SA.cy (String.fromFloat shy)
+                            , SA.rx "7"
+                            , SA.ry "3"
+                            , SA.fill "#000"
+                            , SA.opacity "0.22"
+                            ]
+                            []
+                        , jobDot theme sx sy job.priority
+                        ]
+                    )
 
         allObjects =
             edgeObjects ++ nodeObjects ++ queueObjects
@@ -82,32 +116,118 @@ viewScene cam cfg state metrics jobPositions =
                     in queueLabel cam spec len
                 )
     in
-    Svg.g [] (renderAll cam allObjects ++ jobDots ++ nodeLabels ++ queueLabels)
+    Svg.g []
+        ( renderAll cam [ floorSlab cfg ]
+            ++ renderAll cam (floorTiles cfg)
+            ++ renderAll cam allObjects
+            ++ jobDots
+            ++ nodeLabels
+            ++ queueLabels
+        )
+
+
+-- ── Floor ─────────────────────────────────────────────────────────────────────
+
+{-| Extent of the floor in integer world-tile coordinates, padded by a margin
+around the scene's nodes and queues. -}
+floorBounds : ScenarioConfig -> { x0 : Int, z0 : Int, x1 : Int, z1 : Int }
+floorBounds cfg =
+    let
+        allX = List.map .x cfg.nodes ++ List.map .x cfg.queues
+        allZ = List.map .y cfg.nodes ++ List.map .y cfg.queues
+
+        minWX = (List.minimum allX |> Maybe.withDefault 0)  / 48.0
+        maxWX = (List.maximum allX |> Maybe.withDefault 480) / 48.0
+        minWZ = (List.minimum allZ |> Maybe.withDefault 0)  / 48.0
+        maxWZ = (List.maximum allZ |> Maybe.withDefault 240) / 48.0
+    in
+    { x0 = floor (minWX - 1.5)
+    , z0 = floor (minWZ - 1.5)
+    , x1 = ceiling (maxWX + 1.5)
+    , z1 = ceiling (maxWZ + 1.5)
+    }
+
+
+{-| A single thick slab spanning the whole floor; gives the ground visible
+edge thickness without drawing four walls per tile. -}
+floorSlab : ScenarioConfig -> SceneObject msg
+floorSlab cfg =
+    let
+        b  = floorBounds cfg
+        w  = toFloat (b.x1 - b.x0)
+        d  = toFloat (b.z1 - b.z0)
+        cx = (toFloat b.x0 + toFloat b.x1) / 2
+        cz = (toFloat b.z0 + toFloat b.z1) / 2
+        isExpanse = cfg.meta.theme == "expanse"
+        style =
+            if isExpanse then
+                { topColour = "#0A1422", leftColour = "#060D16", rightColour = "#04090F", w = w, d = d }
+            else
+                { topColour = "#2B3A42", leftColour = "#1C2930", rightColour = "#141E24", w = w, d = d }
+    in
+    { pos = { x = cx, y = -0.15, z = cz }, height = 0.15, shape = Box style }
+
+
+{-| Flat checkerboard quads on the slab's top surface. Each is one polygon
+(no walls), so the whole grid is cheap. -}
+floorTiles : ScenarioConfig -> List (SceneObject msg)
+floorTiles cfg =
+    let
+        b = floorBounds cfg
+        cols = List.range b.x0 (b.x1 - 1)
+        rows = List.range b.z0 (b.z1 - 1)
+        isExpanse = cfg.meta.theme == "expanse"
+        ( fillA, fillB ) =
+            if isExpanse then ( "#0D1B2A", "#111F2E" ) else ( "#37474F", "#2E3C44" )
+    in
+    List.concatMap
+        (\col ->
+            List.map
+                (\row ->
+                    { pos    = { x = toFloat col + 0.5, y = 0.001, z = toFloat row + 0.5 }
+                    , height = 0.0
+                    , shape  = FlatTile
+                        { w = 1.0, d = 1.0
+                        , fill = if modBy 2 (col + row) == 0 then fillA else fillB
+                        }
+                    }
+                )
+                rows
+        )
+        cols
 
 
 -- ── Node → SceneObjects ───────────────────────────────────────────────────────
 
-nodeToObjects : NodeSpec -> NodeMetrics -> List (SceneObject msg)
-nodeToObjects spec metrics =
+nodeToObjects : String -> NodeSpec -> NodeMetrics -> List (SceneObject msg)
+nodeToObjects theme spec metrics =
     let
         pos = { x = spec.x / 48.0, y = 0.0, z = spec.y / 48.0 }
         h   = spec.h
         u   = metrics.utilisation
 
+        style = nodeBoxStyle theme spec u
+        nodeW = style.w
+
         node =
             { pos    = pos
             , height = h
-            , shape  = Box (nodeBoxStyle spec u)
+            , shape  = Box style
             }
 
+        -- Left-anchored gauge: the fill grows rightward from the node's left
+        -- edge (pos.x - nodeW/2), so it reads as a 0→100% bar rather than a
+        -- slab that expands symmetrically from the centre.
+        fillW = max 0.04 (u * nodeW)
+
         utilBar =
-            { pos    = { pos | y = h }
-            , height = 0.05
+            { pos    = { x = pos.x - nodeW / 2.0 + fillW / 2.0, y = h + 0.02, z = pos.z }
+            , height = 0.06
             , shape  = Box
                 { topColour   = utilColour u
                 , leftColour  = utilColour u
                 , rightColour = utilColour u
-                , w           = u * 1.0
+                , w           = fillW
                 , d           = 0.2
                 }
             }
@@ -115,88 +235,195 @@ nodeToObjects spec metrics =
     [ node, utilBar ]
 
 
-nodeBoxStyle : NodeSpec -> Float -> BoxStyle
-nodeBoxStyle spec u =
+nodeBoxStyle : String -> NodeSpec -> Float -> BoxStyle
+nodeBoxStyle theme spec u =
     case spec.kind of
         ScenarioConfig.SourceSpec _ ->
-            { topColour = "#4CAF50", leftColour = "#388E3C", rightColour = "#2E7D32", w = 1.0, d = 1.0 }
+            if theme == "expanse" then
+                { topColour = "#00838F", leftColour = "#006064", rightColour = "#004D40", w = 1.0, d = 1.0 }
+            else
+                { topColour = "#4CAF50", leftColour = "#388E3C", rightColour = "#2E7D32", w = 1.0, d = 1.0 }
 
         ScenarioConfig.SinkSpec ->
-            { topColour = "#9E9E9E", leftColour = "#757575", rightColour = "#616161", w = 1.0, d = 1.0 }
+            if theme == "expanse" then
+                { topColour = "#6A1B9A", leftColour = "#4A148C", rightColour = "#2E0064", w = 1.0, d = 1.0 }
+            else
+                { topColour = "#9E9E9E", leftColour = "#757575", rightColour = "#616161", w = 1.0, d = 1.0 }
 
         ScenarioConfig.WorkerSpec _ ->
-            let
-                top = if u > 0.8 then "#EF5350" else if u > 0.5 then "#FFA726" else "#42A5F5"
-            in
-            { topColour = top, leftColour = darken top, rightColour = darken2 top, w = 1.0, d = 1.0 }
+            if theme == "expanse" then
+                let
+                    ( top, left, right ) =
+                        if u > 0.8 then ( "#FF7043", "#E64A19", "#BF360C" )
+                        else if u > 0.5 then ( "#78909C", "#546E7A", "#37474F" )
+                        else ( "#546E7A", "#37474F", "#263238" )
+                in
+                { topColour = top, leftColour = left, rightColour = right, w = 1.0, d = 1.0 }
+            else
+                let top = if u > 0.8 then "#EF5350" else if u > 0.5 then "#FFA726" else "#42A5F5"
+                in { topColour = top, leftColour = darken top, rightColour = darken2 top, w = 1.0, d = 1.0 }
 
         ScenarioConfig.DispatcherSpec _ ->
-            { topColour = "#AB47BC", leftColour = "#7B1FA2", rightColour = "#6A1B9A", w = 1.0, d = 1.0 }
+            if theme == "expanse" then
+                { topColour = "#FF8F00", leftColour = "#E65100", rightColour = "#BF360C", w = 1.0, d = 1.0 }
+            else
+                { topColour = "#AB47BC", leftColour = "#7B1FA2", rightColour = "#6A1B9A", w = 1.0, d = 1.0 }
 
         ScenarioConfig.InterruptSpec ->
-            { topColour = "#F44336", leftColour = "#C62828", rightColour = "#B71C1C", w = 0.6, d = 0.6 }
+            if theme == "expanse" then
+                { topColour = "#B71C1C", leftColour = "#7F0000", rightColour = "#5D0000", w = 0.8, d = 0.8 }
+            else
+                { topColour = "#F44336", leftColour = "#C62828", rightColour = "#B71C1C", w = 0.6, d = 0.6 }
 
 
 -- ── Queue → SceneObjects ──────────────────────────────────────────────────────
 
-queueToObjects : QueueSpec -> Int -> QueueMetrics -> List (SceneObject msg)
-queueToObjects spec len qm =
+queueToObjects : String -> QueueSpec -> List Priority -> QueueMetrics -> List (SceneObject msg)
+queueToObjects theme spec prios _ =
     let
-        pos          = { x = spec.x / 48.0, y = 0.0, z = spec.y / 48.0 }
-        cap          = spec.capacity
-        fillFraction = if cap > 0 then toFloat len / toFloat cap else 0.0
-        barW         = toFloat cap * 0.4
+        pos  = { x = spec.x / 48.0, y = 0.0, z = spec.y / 48.0 }
+        barW = toFloat spec.capacity * 0.4
+
+        ( ptTop, ptLeft, ptRight ) =
+            if theme == "expanse" then
+                ( "#8D4004", "#6D2E02", "#4E1E01" )
+            else
+                ( "#607D8B", "#455A64", "#37474F" )
 
         platform =
             { pos    = pos
             , height = spec.h
             , shape  = Box
-                { topColour   = "#607D8B"
-                , leftColour  = "#455A64"
-                , rightColour = "#37474F"
+                { topColour   = ptTop
+                , leftColour  = ptLeft
+                , rightColour = ptRight
                 , w = barW
                 , d = 0.6
                 }
             }
 
-        fillBar =
-            { pos    = { pos | y = spec.h }
-            , height = 0.05
-            , shape  = Box
-                { topColour   = fillColour fillFraction
-                , leftColour  = fillColour fillFraction
-                , rightColour = fillColour fillFraction
-                , w = fillFraction * barW
-                , d = 0.6
-                }
-            }
+        -- Slots sit in a row along the platform's x-axis. The platform is
+        -- centred on pos, so the first cell starts at the left edge and each
+        -- slot is centred within its 0.4-wide cell. A gap (cell 0.4 vs cube
+        -- 0.25) separates adjacent jobs so the queue reads slot-by-slot.
+        cell     = 0.4
+        leftEdge = pos.x - barW / 2
+        slotX i  = leftEdge + (toFloat i + 0.5) * cell
+
+        ( skTop, skLeft, skRight ) =
+            if theme == "expanse" then
+                ( "#05202B", "#03161E", "#020E14" )
+            else
+                ( "#2F3E46", "#26333A", "#1C262C" )
+
+        -- One recessed socket per capacity slot, so empty capacity is visible
+        -- at a glance (a "3/6 full" buffer reads without the label).
+        slotSockets =
+            List.range 0 (spec.capacity - 1)
+                |> List.map
+                    (\i ->
+                        { pos    = { x = slotX i, y = spec.h, z = pos.z }
+                        , height = 0.05
+                        , shape  = Box
+                            { topColour = skTop, leftColour = skLeft, rightColour = skRight
+                            , w = 0.3, d = 0.4
+                            }
+                        }
+                    )
+
+        -- Filled slots: bright priority-coloured cubes seated in their socket.
+        jobCubes =
+            List.indexedMap
+                (\i prio ->
+                    { pos    = { x = slotX i, y = spec.h + 0.05, z = pos.z }
+                    , height = 0.28
+                    , shape  = Box (jobBoxStyle prio)
+                    }
+                )
+                prios
     in
-    [ platform, fillBar ]
+    platform :: (slotSockets ++ jobCubes)
+
+
+jobBoxStyle : Priority -> BoxStyle
+jobBoxStyle prio =
+    case prio of
+        Low      -> { topColour = "#b2bec3", leftColour = "#8e9aa3", rightColour = "#747e86", w = 0.25, d = 0.35 }
+        Normal   -> { topColour = "#74b9ff", leftColour = "#4a9de0", rightColour = "#2e7fc4", w = 0.25, d = 0.35 }
+        High     -> { topColour = "#fdcb6e", leftColour = "#e0b050", rightColour = "#c49030", w = 0.25, d = 0.35 }
+        Critical -> { topColour = "#d63031", leftColour = "#b52021", rightColour = "#961010", w = 0.25, d = 0.35 }
 
 
 -- ── Edge → SceneObject ────────────────────────────────────────────────────────
 
-edgeToObject : ScenarioConfig -> EdgeSpec -> Maybe (SceneObject msg)
-edgeToObject cfg edge =
-    let
-        fromPos = resolveEndpoint cfg edge.from
-        toPos   = resolveEndpoint cfg edge.to
-    in
-    case ( fromPos, toPos ) of
+{-| An edge is sampled into several short segments along its quadratic arc, each
+emitted as its own SceneObject positioned at the segment midpoint. This lets the
+painter's-algorithm depth sort interleave edge segments with the boxes they pass
+in front of / behind, instead of sorting the whole edge by a single endpoint. -}
+edgeToObjects : ScenarioConfig -> EdgeSpec -> List (SceneObject msg)
+edgeToObjects cfg edge =
+    case ( resolveEndpoint cfg edge.from, resolveEndpoint cfg edge.to ) of
         ( Just fp, Just tp ) ->
-            Just
-                { pos    = fp
-                , height = 0.0
-                , shape  =
-                    Path3D
-                        { points = [ fp, arcMid fp tp, tp ]
-                        , stroke = "#78909C"
-                        , width  = 0.5
+            arcSamples fp tp 10
+                |> segmentPairs
+                |> List.map
+                    (\( a, b ) ->
+                        { pos    = midpoint a b
+                        , height = 0.0
+                        , shape  =
+                            Path3D
+                                { points = [ a, b ]
+                                , stroke = "#90A4AE"
+                                , width  = 2.0
+                                }
                         }
-                }
+                    )
 
         _ ->
-            Nothing
+            []
+
+
+{-| Sample a quadratic Bézier (from → arcMid → to) into n+1 points. -}
+arcSamples :
+    { x : Float, y : Float, z : Float }
+    -> { x : Float, y : Float, z : Float }
+    -> Int
+    -> List { x : Float, y : Float, z : Float }
+arcSamples a b n =
+    let
+        m = arcMid a b
+        at t =
+            let
+                u = 1.0 - t
+                q c0 c1 c2 = u * u * c0 + 2.0 * u * t * c1 + t * t * c2
+            in
+            { x = q a.x m.x b.x
+            , y = q a.y m.y b.y
+            , z = q a.z m.z b.z
+            }
+    in
+    List.range 0 n |> List.map (\i -> at (toFloat i / toFloat n))
+
+
+segmentPairs : List a -> List ( a, a )
+segmentPairs xs =
+    case xs of
+        p :: ((q :: _) as rest) ->
+            ( p, q ) :: segmentPairs rest
+
+        _ ->
+            []
+
+
+midpoint :
+    { x : Float, y : Float, z : Float }
+    -> { x : Float, y : Float, z : Float }
+    -> { x : Float, y : Float, z : Float }
+midpoint a b =
+    { x = (a.x + b.x) / 2.0
+    , y = (a.y + b.y) / 2.0
+    , z = (a.z + b.z) / 2.0
+    }
 
 
 resolveEndpoint : ScenarioConfig -> String -> Maybe { x : Float, y : Float, z : Float }
@@ -239,7 +466,7 @@ arcMid a b =
 nodeLabel : Camera -> NodeSpec -> NodeMetrics -> SimState -> Svg msg
 nodeLabel cam spec nm state =
     let
-        pos    = { x = spec.x / 48.0 + 0.5, y = spec.h + 0.25, z = spec.y / 48.0 + 0.5 }
+        pos    = { x = spec.x / 48.0, y = spec.h + 0.25, z = spec.y / 48.0 }
         ( sx, sy ) = Camera.project cam pos
 
         mNode  = SimState.getNode (NodeID spec.id) state
@@ -267,8 +494,7 @@ nodeLabel cam spec nm state =
 queueLabel : Camera -> QueueSpec -> Int -> Svg msg
 queueLabel cam spec len =
     let
-        barW   = toFloat spec.capacity * 0.4
-        pos    = { x = spec.x / 48.0 + barW / 2, y = spec.h + 0.25, z = spec.y / 48.0 + 0.3 }
+        pos    = { x = spec.x / 48.0, y = spec.h + 0.25, z = spec.y / 48.0 }
         ( sx, sy ) = Camera.project cam pos
         fillStr = String.fromInt len ++ "/" ++ String.fromInt spec.capacity
     in
@@ -294,15 +520,119 @@ isoText sx sy colour size weight content =
 
 -- ── Job dot ───────────────────────────────────────────────────────────────────
 
-jobDot : Float -> Float -> Svg msg
-jobDot sx sy =
-    Svg.circle
-        [ SA.cx   (String.fromFloat sx)
-        , SA.cy   (String.fromFloat sy)
-        , SA.r    "5"
-        , SA.fill "#FFD54F"
+jobDot : String -> Float -> Float -> Priority -> Svg msg
+jobDot theme sx sy prio =
+    if theme == "expanse" then
+        shipMarker sx sy prio
+    else
+        Svg.circle
+            [ SA.cx   (String.fromFloat sx)
+            , SA.cy   (String.fromFloat sy)
+            , SA.r    "5"
+            , SA.fill (priorityColor prio)
+            ]
+            []
+
+
+{-| A small angular hull silhouette (bow up) used as the job marker in the
+expanse theme — an asset-free vector ship in place of a plain dot. Critical
+jobs get a brighter outline so warships stand out in transit. -}
+shipMarker : Float -> Float -> Priority -> Svg msg
+shipMarker sx sy prio =
+    let
+        pt dx dy =
+            String.fromFloat (sx + dx) ++ "," ++ String.fromFloat (sy + dy)
+
+        hull =
+            String.join " "
+                [ pt 0 -7, pt 4 -1, pt 3 5, pt -3 5, pt -4 -1 ]
+
+        stroke =
+            case prio of
+                Critical -> "#ffe08a"
+                _        -> "#0b1b26"
+    in
+    Svg.g []
+        [ Svg.polygon
+            [ SA.points hull
+            , SA.fill   (priorityColor prio)
+            , SA.stroke stroke
+            , SA.strokeWidth (if prio == Critical then "1.4" else "0.8")
+            , SA.strokeLinejoin "round"
+            ]
+            []
+        , Svg.circle
+            [ SA.cx (String.fromFloat sx)
+            , SA.cy (String.fromFloat (sy + 5.5))
+            , SA.r  "1.4"
+            , SA.fill (if prio == Critical then "#ff5b3a" else "#56d2ff")
+            , SA.opacity "0.9"
+            ]
+            []
         ]
-        []
+
+
+priorityColor : Priority -> String
+priorityColor p =
+    case p of
+        Low      -> "#b2bec3"
+        Normal   -> "#74b9ff"
+        High     -> "#fdcb6e"
+        Critical -> "#d63031"
+
+
+-- ── Starfield ─────────────────────────────────────────────────────────────────
+
+{-| Parallax starfield for the isometric background.
+Three depth layers scroll at different rates as the camera spins.
+Stars are deterministic (no random seed needed in the model). -}
+viewStarfield : Camera -> Float -> Float -> Svg msg
+viewStarfield cam canvasW canvasH =
+    let
+        layers =
+            [ { count = 70, parallax = 0.04, minR = 0.4, maxR = 0.9, opacity = 0.35 }
+            , { count = 40, parallax = 0.10, minR = 0.7, maxR = 1.3, opacity = 0.55 }
+            , { count = 20, parallax = 0.20, minR = 1.0, maxR = 2.0, opacity = 0.80 }
+            ]
+
+        -- Simple deterministic LCG: avoids importing Random just for static positions
+        lcg n = modBy 99991 (n * 48271 + 12345)
+
+        renderStar layerIdx { parallax, minR, maxR, opacity } i =
+            let
+                s1 = lcg (i * 31337 + layerIdx * 99991)
+                s2 = lcg (s1 + 7919)
+                s3 = lcg (s2 + 4567)
+                x0 = toFloat s1 / 99991.0
+                y0 = toFloat s2 / 99991.0
+                sz = toFloat s3 / 99991.0
+                -- Parallax: one full camera revolution shifts a star by parallax*canvasW
+                shift    = cam.spinAngle / (2 * pi) * parallax * canvasW
+                rawX     = x0 * canvasW + shift
+                n        = floor (rawX / canvasW)
+                wrappedX = rawX - toFloat n * canvasW
+                sy_      = y0 * canvasH
+                r        = minR + sz * (maxR - minR)
+            in
+            Svg.circle
+                [ SA.cx      (String.fromFloat wrappedX)
+                , SA.cy      (String.fromFloat sy_)
+                , SA.r       (String.fromFloat r)
+                , SA.fill    "#ffffff"
+                , SA.opacity (String.fromFloat opacity)
+                ]
+                []
+    in
+    Svg.g []
+        (List.concat
+            (List.indexedMap
+                (\li layer ->
+                    List.range 0 (layer.count - 1)
+                        |> List.map (renderStar li layer)
+                )
+                layers
+            )
+        )
 
 
 -- ── Colour helpers ────────────────────────────────────────────────────────────
@@ -313,12 +643,6 @@ utilColour u =
     else if u > 0.7 then "#FFA726"
     else "#66BB6A"
 
-
-fillColour : Float -> String
-fillColour f =
-    if f > 0.9 then "#EF5350"
-    else if f > 0.6 then "#FFA726"
-    else "#42A5F5"
 
 
 darken : String -> String

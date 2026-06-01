@@ -1550,7 +1550,18 @@ kind of effect the simulation is meant to make visible.
 Theming is purely cosmetic — the engine does not change.
 
 - [x] `SpriteSource` and `Background` types in `Theme.elm` (done in Phase 3)
-- [ ] `expanse` theme (flat 2D): ship sprite sheet (4 priorities × frames), station-interior background image, hex-panel SVG pattern for queue slots
+- [~] `expanse` theme (flat 2D): **colour skin done** — `Des.Scenario.viewCanvas` reads
+      `config.meta.theme` and threads it through `svgEdges` / `svgQueues` / `svgNodes` /
+      `svgWorker` / `svgDispatcher` / `svgInterruptBadge` / `svgCircle`. The `expanse`
+      theme paints a near-black canvas (`#0d1117`), steel-blue edges, dark-navy queues with
+      teal fill, steel/orange/dark-red worker states, amber dispatcher, dark-teal source,
+      dark-purple sink, and an interrupt badge that shows the node label uppercased + ⚡ when
+      active. Still pending: ship sprite sheet (4 priorities × frames), station-interior
+      background image, hex-panel SVG pattern for queue slots.
+- [x] `belterShipyard` scenario in `src/Scenarios.elm` + dropdown entry in `Demo.elm`:
+      Docking Collar → Intake → Shift Coord (dispatcher, shortest-queue) → Weld Q / Sys Q →
+      Welder / Systems Tech (pressure-cert sign-off) → Airlock → Airlock Out. Two scheduled
+      Bosmang all-hands interrupts at t=200 (35 ticks) and t=500 (25 ticks). `theme: "expanse"`.
 - [ ] `supermarket` theme (flat 2D): trolley sprite sheet, supermarket background
 - [ ] `software-team` theme (flat 2D): ticket sprites, office background
 - [x] elm-presentation integration: `Des.Scenario` component API in `src/Des/Scenario.elm` —
@@ -1567,20 +1578,66 @@ Theming is purely cosmetic — the engine does not change.
 
 ### Phase 5 — Rotatable Isometric Renderer
 
-- [ ] `Camera` type and `project` function (Y-axis rotation + isometric projection)
-- [ ] `SceneObject` / `SceneShape` types (`Box`, `FlatTile`, `BillboardSprite`, `DirectionalSprite`, `Path3D`)
-- [ ] Painter's-algorithm depth sort (`sortKey` computed after rotation each frame)
-- [ ] `Box` face rendering: top + left + right faces with shading relative to `spinAngle`
-- [ ] `FlatTile` floor grid with tiled texture (PNG `SpriteSource`)
-- [ ] `BillboardSprite`: always-upright image at projected position; scaled by `cam.scale`
-- [ ] `DirectionalSprite`: frame selection by `spinAngle`; `directionFrame` helper
-- [ ] `ParallaxBackground` for isometric scenes: layer offsets driven by `spinAngle * depth`
-- [ ] Camera drag controls: horizontal drag → `spinAngle`, vertical drag → `tiltAngle`, scroll → `scale`
-- [ ] `z` and `h` fields added to node/queue JSON layout; 2D renderer ignores them
-- [ ] Jobs animate along `Path3D` edges; hover + bob while `Busy`; teleport at high speed
-- [ ] Queue slots arranged along the queue's orientation axis in 3D
-- [ ] `expanse` isometric theme: hex-panel floor tiles, industrial `Box` nodes, 8-direction ship sprite sheet (32 frames), parallax starfield + station background, worker billboard sprites
-- [ ] Camera reset on double-click; camera state in `Model`, never in `SimState`
+- [x] `Camera` type and `project` function (Y-axis rotation + isometric projection) — `Camera.elm`
+- [x] `SceneObject` / `SceneShape` types (`Box`, `FlatTile`, `BillboardSprite`, `DirectionalSprite`, `Path3D`, `RawSvg`) — `SceneObject.elm`
+- [x] Painter's-algorithm depth sort (`sortByDepth` via `Camera.depthOf`, recomputed each frame)
+- [x] `Box` face rendering: **all four side walls + top, depth-sorted farthest-first** so the
+      box stays solid at any `spinAngle` (see "Box convention" below). x-walls use `leftColour`,
+      z-walls use `rightColour`, top uses `topColour`.
+- [x] `FlatTile` floor: single thick `Box` slab + flat checker tiles on top (`floorSlab` +
+      `floorTiles`), rendered in ordered passes so tiles always sit on the slab surface.
+      Theme-aware colours (near-black navy for `expanse`, slate for plain). PNG-textured
+      tiles still pending.
+- [x] `BillboardSprite`: handles all three `SpriteSource` variants (`VectorSymbol` → `<use>`,
+      `RasterImage` → `<image>`, `SpriteSheet` → nested `<svg viewBox>` clip), scaled by `cam.scale`.
+      Not yet exercised by a theme (no sprite assets bundled).
+- [x] `DirectionalSprite`: frame index chosen from `cam.spinAngle` (`modBy directions`), frames
+      laid out horizontally in the sheet. Not yet exercised by a theme.
+- [x] `ParallaxBackground` for isometric scenes: `IsoRenderer.viewStarfield` — 3 deterministic
+      depth layers (LCG positions) scrolling at 4 % / 10 % / 20 % of canvas width per camera
+      revolution, wrapping seamlessly. Rendered behind the scene in `Des.Scenario.viewCanvas`.
+- [x] Camera drag controls: horizontal drag → `spinAngle`, vertical drag → `tiltAngle`, scroll → `scale`
+      (`DragStart/DragMove/DragEnd/WheelZoom`, global mouse subs while dragging, `preventDefaultOn "wheel"`)
+- [x] `z` and `h` fields read by iso renderer; 2D renderer ignores them
+- [~] Jobs animate along `Path3D` edges: dots project through the camera, rise to `y=1.2` in
+      transit / settle to `y=0.6` at rest, and cast a soft floor shadow ellipse. They follow the
+      2D waypoint path projected into 3D — not yet sampled along the actual `Path3D` arc geometry.
+- [x] Queue job cubes arranged in a row along the platform's x-axis (individual priority-coloured
+      cubes, not slot circles); centred per 0.4-wide cell under the center convention. Each
+      capacity slot also renders a recessed dark **socket** (`slotSockets`), so empty capacity is
+      visible at a glance (a "3/6 full" buffer reads without the label) — informed by Simul8's
+      queue-visualisation conventions (configurable item gap; gauge fill at a glance). Filled
+      slots seat a bright cube on top of the socket.
+- [~] `expanse` isometric theme: **colour skin + starfield + ship job markers done** — theme-aware
+      node/queue/floor/socket colours in `IsoRenderer`, parallax starfield background, and job
+      markers drawn as small angular **ship-hull silhouettes** (`shipMarker`, asset-free vector
+      art; Critical warships get a brighter outline + engine glow) instead of plain dots. Still
+      pending: hex-panel floor tiles, 8-direction ship sprite sheet (32 frames), station background
+      image, worker billboards. (Web research: classic dimetric 2:1 / 26.565° vs our true-iso 30°
+      tilt; 8-direction sprite sheets are the standard for ships/vehicles.)
+- [x] Camera reset on double-click (`ResetCamera`); camera state lives in `Des.Scenario.Model`, never in `SimState`
+
+**Box / coordinate convention (Phase 5 cleanup).** Originally `renderBox` treated `pos` as the
+bottom-left-front *corner* and grew +w/+d from it, while edges (`resolveEndpoint`) and job dots
+used `spec.x/48` as the *centre*. This caused two visible bugs: (1) edges and dots were offset by
+(w/2, d/2) from each box, and (2) only three fixed faces were drawn, so spinning the camera
+revealed see-through boxes. Both are fixed by a single convention: **`pos` is the centre of the
+footprint at floor level**; `renderBox` spans ±w/2 in x, ±d/2 in z, rises `height` in y, and draws
+all four walls depth-sorted + top. `renderFlatTile` matches. Node/queue labels dropped their old
+`+0.5` / `+barW/2` offsets accordingly. Belter node heights were also flattened (was 1.0–2.5, now
+1.0–1.4) so the skyline reads calmly.
+
+**Known iso limitations (future polish):**
+- [x] Edges now sample their quadratic arc into 10 short segments (`edgeToObjects` →
+  `arcSamples`/`segmentPairs`), each emitted as its own SceneObject positioned at the segment
+  midpoint, so the painter's-algorithm depth sort interleaves edge segments with the boxes they
+  pass in front of / behind instead of sorting a whole edge by one endpoint. (Also renders a
+  smoother curve.)
+- [x] Node utilisation bar is now a left-anchored gauge: the fill grows rightward from the node's
+  left edge (`pos.x - nodeW/2`), reading as a 0→100% bar rather than a centre-anchored slab.
+- Job dots still follow projected 2D waypoints, not the curved `Path3D` arc; sampling the arc
+  (now that `arcSamples` exists) would make transit motion match the drawn connector. Needs the
+  job-animation pipeline in `Des.Scenario` to track which edge a job is on + its progress.
 
 ### Phase 6 — WebGL 3D (future)
 
