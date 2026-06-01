@@ -660,6 +660,7 @@ viewCanvas model =
                     ]
                     [ IsoRenderer.viewStarfield cam isoW isoH
                     , IsoRenderer.viewScene cam model.config model.simState metrics jobPositions
+                    , IsoRenderer.viewAlert (SimState.isInterruptActive model.simState) isoW
                     ]
                 ]
 

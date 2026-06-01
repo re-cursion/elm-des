@@ -1,6 +1,7 @@
 module IsoRenderer exposing
     ( viewScene
     , viewStarfield
+    , viewAlert
     , JobIsoData
     , nodeToObjects
     , queueToObjects
@@ -53,8 +54,11 @@ viewScene cam cfg state metrics jobPositions =
             cfg.nodes
                 |> List.concatMap
                     (\spec ->
-                        let nm = Dict.get spec.id metrics.nodes |> Maybe.withDefault emptyNodeMetrics
-                        in nodeToObjects theme spec nm
+                        let
+                            nm = Dict.get spec.id metrics.nodes |> Maybe.withDefault emptyNodeMetrics
+                            ns = SimState.getNode (NodeID spec.id) state |> Maybe.map .state
+                        in
+                        nodeToObjects theme spec nm ns
                     )
 
         queueObjects =
@@ -199,21 +203,53 @@ floorTiles cfg =
 
 -- ── Node → SceneObjects ───────────────────────────────────────────────────────
 
-nodeToObjects : String -> NodeSpec -> NodeMetrics -> List (SceneObject msg)
-nodeToObjects theme spec metrics =
+nodeToObjects : String -> NodeSpec -> NodeMetrics -> Maybe NodeState -> List (SceneObject msg)
+nodeToObjects theme spec metrics mState =
     let
         pos = { x = spec.x / 48.0, y = 0.0, z = spec.y / 48.0 }
         h   = spec.h
         u   = metrics.utilisation
 
-        style = nodeBoxStyle theme spec u
-        nodeW = style.w
+        baseStyle = nodeBoxStyle theme spec u
+        nodeW = baseStyle.w
+
+        -- During a bosmang all-hands the worker downs tools: render the box
+        -- dark and lifeless so the interrupt is unmistakable in the iso view.
+        isPaused =
+            case mState of
+                Just (Paused _) -> True
+                _               -> False
+
+        style =
+            if isPaused then
+                { topColour = "#263238", leftColour = "#1A2429", rightColour = "#121A1E"
+                , w = baseStyle.w, d = baseStyle.d
+                }
+            else
+                baseStyle
 
         node =
             { pos    = pos
             , height = h
             , shape  = Box style
             }
+
+        -- A small beacon mast on the back corner whose colour signals live
+        -- state (busy / blocked / signoff / preempted / paused).
+        beacon =
+            case Maybe.andThen beaconColour mState of
+                Just c ->
+                    [ { pos    = { x = pos.x + nodeW / 2.0 - 0.12, y = h, z = pos.z - nodeW / 2.0 + 0.12 }
+                      , height = 0.3
+                      , shape  = Box
+                            { topColour = c, leftColour = c, rightColour = c
+                            , w = 0.1, d = 0.1
+                            }
+                      }
+                    ]
+
+                Nothing ->
+                    []
 
         -- Left-anchored gauge: the fill grows rightward from the node's left
         -- edge (pos.x - nodeW/2), so it reads as a 0→100% bar rather than a
@@ -232,7 +268,20 @@ nodeToObjects theme spec metrics =
                 }
             }
     in
-    [ node, utilBar ]
+    [ node, utilBar ] ++ beacon
+
+
+{-| State-signalling beacon colour for a worker node. `Idle` (and non-worker
+states) get no beacon. -}
+beaconColour : NodeState -> Maybe String
+beaconColour st =
+    case st of
+        Busy _ _      -> Just "#FFD54F"   -- working: warm amber
+        Blocked _     -> Just "#EF5350"   -- output blocked: red
+        Signoff _ _   -> Just "#AB47BC"   -- awaiting sign-off: purple
+        Preempted _ _ -> Just "#FF7043"   -- preempted: orange
+        Paused _      -> Just "#B71C1C"   -- bosmang meeting: deep red alert
+        Idle          -> Nothing
 
 
 nodeBoxStyle : String -> NodeSpec -> Float -> BoxStyle
@@ -579,6 +628,38 @@ priorityColor p =
         Normal   -> "#74b9ff"
         High     -> "#fdcb6e"
         Critical -> "#d63031"
+
+
+-- ── Interrupt alert overlay ───────────────────────────────────────────────────
+
+{-| Screen-space banner shown across the top of the iso canvas while a bosmang
+all-hands (interrupt) is active. Drawn last so it sits over the scene. -}
+viewAlert : Bool -> Float -> Svg msg
+viewAlert active canvasW =
+    if not active then
+        Svg.g [] []
+    else
+        Svg.g []
+            [ Svg.rect
+                [ SA.x "0", SA.y "0"
+                , SA.width (String.fromFloat canvasW)
+                , SA.height "26"
+                , SA.fill "#B71C1C"
+                , SA.opacity "0.88"
+                ]
+                []
+            , Svg.text_
+                [ SA.x (String.fromFloat (canvasW / 2.0))
+                , SA.y "18"
+                , SA.textAnchor "middle"
+                , SA.fontSize "13"
+                , SA.fontWeight "bold"
+                , SA.fontFamily "monospace"
+                , SA.fill "#fff"
+                , SA.letterSpacing "1"
+                ]
+                [ Svg.text "⚡ BOSMANG ALL-HANDS — WORKERS DOWN TOOLS ⚡" ]
+            ]
 
 
 -- ── Starfield ─────────────────────────────────────────────────────────────────

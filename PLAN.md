@@ -1616,6 +1616,14 @@ Theming is purely cosmetic — the engine does not change.
       image, worker billboards. (Web research: classic dimetric 2:1 / 26.565° vs our true-iso 30°
       tilt; 8-direction sprite sheets are the standard for ships/vehicles.)
 - [x] Camera reset on double-click (`ResetCamera`); camera state lives in `Des.Scenario.Model`, never in `SimState`
+- [x] **State-reactive iso nodes**: `nodeToObjects` now takes the live `Maybe NodeState`. During a
+      bosmang all-hands the node box renders dark/lifeless (`isPaused`), and every active node grows a
+      small corner **beacon mast** whose colour signals state (`beaconColour`: busy=amber, blocked=red,
+      signoff=purple, preempted=orange, paused=deep-red alert). Makes the interrupt unmistakable in 3D,
+      mirroring the flat-2D state colours.
+- [x] **Interrupt alert banner**: `IsoRenderer.viewAlert` draws a red "⚡ BOSMANG ALL-HANDS —
+      WORKERS DOWN TOOLS ⚡" banner across the top of the iso canvas while `SimState.isInterruptActive`,
+      drawn over the scene. Showcases the boss-node mechanic the plan calls out as the primary demo beat.
 
 **Box / coordinate convention (Phase 5 cleanup).** Originally `renderBox` treated `pos` as the
 bottom-left-front *corner* and grew +w/+d from it, while edges (`resolveEndpoint`) and job dots
