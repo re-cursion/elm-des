@@ -107,11 +107,16 @@ viewScene cam cfg state metrics jobPositions =
                             ( tsx, tsy ) = Camera.project cam { x = target.x, y = dotY, z = target.z }
                             dsx = tsx - sx
                             dsy = tsy - sy
+                            -- Rest orientation: lie flat pointing downstream
+                            -- (world +x), so a parked ship waits naturally
+                            -- instead of standing upright (bow-up).
+                            ( rsx, rsy ) = Camera.project cam { x = renderPos.x + 1.0, y = dotY, z = renderPos.z }
+                            restHeading = atan2 (rsy - sy) (rsx - sx) * 180.0 / pi + 90.0
                             heading =
                                 if dsx * dsx + dsy * dsy > 1.0 then
                                     atan2 dsy dsx * 180.0 / pi + 90.0
                                 else
-                                    0.0
+                                    restHeading
                         in
                         [ Svg.ellipse
                             [ SA.cx (String.fromFloat shx)
@@ -347,22 +352,33 @@ primitives so they depth-sort with the rest of the scene.
 expanseDecor : NodeSpec -> { x : Float, y : Float, z : Float } -> Float -> Float -> List (SceneObject msg)
 expanseDecor spec pos h nodeW =
     let
-        post px py pz ph w colour =
+        -- Rectangular box with auto-shaded side faces, placed by its footprint
+        -- centre at (px,py,pz).
+        boxAt px py pz w d ph top left right =
             { pos    = { x = px, y = py, z = pz }
             , height = ph
-            , shape  = Box { topColour = colour, leftColour = colour, rightColour = colour, w = w, d = w }
+            , shape  = Box { topColour = top, leftColour = left, rightColour = right, w = w, d = d }
             }
+
+        strut px py pz ph w colour =
+            boxAt px py pz w w ph colour colour colour
 
         hw = nodeW / 2.0
     in
     case spec.kind of
         ScenarioConfig.WorkerSpec _ ->
             let
-                clampColour = "#455A64"
-                armX = pos.x - hw - 0.04
+                clamp = "#455A64"
+                armX  = pos.x - hw - 0.04
+                postH = h * 0.9
             in
-            [ post armX 0.0 (pos.z - hw + 0.12) (h * 0.85) 0.12 clampColour
-            , post armX 0.0 (pos.z + hw - 0.12) (h * 0.85) 0.12 clampColour
+            -- A docking berth: two clamp posts on the −x approach face joined by
+            -- a crossbeam (the docking collar frame the ship noses into), a
+            -- rooftop sensor block, and the cyan guidance light.
+            [ strut armX 0.0 (pos.z - hw + 0.12) postH 0.12 clamp
+            , strut armX 0.0 (pos.z + hw - 0.12) postH 0.12 clamp
+            , boxAt armX postH pos.z 0.14 (nodeW - 0.04) 0.12 "#607D8B" "#455A64" "#37474F"
+            , boxAt pos.x h (pos.z - hw + 0.2) 0.42 0.3 0.2 "#546E7A" "#37474F" "#263238"
             , { pos    = { x = pos.x - hw - 0.18, y = h * 0.45, z = pos.z }
               , height = 0.1
               , shape  = Box { topColour = "#26C6DA", leftColour = "#0097A7", rightColour = "#006064", w = 0.12, d = 0.12 }
@@ -370,8 +386,11 @@ expanseDecor spec pos h nodeW =
             ]
 
         ScenarioConfig.DispatcherSpec _ ->
-            [ post pos.x h pos.z 0.55 0.08 "#90A4AE"
-            , { pos    = { x = pos.x, y = h + 0.55, z = pos.z }
+            -- Control hub: a stepped-back upper deck, an antenna mast, and a
+            -- pulsing beacon — a little traffic-control tower.
+            [ boxAt pos.x h pos.z (nodeW * 0.62) (nodeW * 0.62) 0.38 "#FFB300" "#E65100" "#BF360C"
+            , strut pos.x (h + 0.38) pos.z 0.5 0.08 "#90A4AE"
+            , { pos    = { x = pos.x, y = h + 0.88, z = pos.z }
               , height = 0.14
               , shape  = Box { topColour = "#4DD0E1", leftColour = "#26C6DA", rightColour = "#0097A7", w = 0.18, d = 0.18 }
               }
@@ -773,16 +792,24 @@ shipMarker sx sy heading prio =
         pt dx dy =
             String.fromFloat (sx + dx) ++ "," ++ String.fromFloat (sy + dy)
 
-        -- All shapes authored bow-up (toward −y); the group is rotated about
-        -- (sx,sy) to face the travel heading.
+        -- A blocky utilitarian frigate (Expanse-style: flat-nosed hull, raised
+        -- bridge, broad drive block — not a pointed rocket). Authored bow-up
+        -- (toward −y); the group rotates about (sx,sy) to face the heading.
         hull =
-            String.join " " [ pt 0 -9, pt 3 -3, pt 2.5 6, pt -2.5 6, pt -3 -3 ]
+            String.join " "
+                [ pt -1.8 -9, pt 1.8 -9      -- flat nose
+                , pt 3 -5, pt 3 5            -- straight flanks
+                , pt 2.2 7.5, pt -2.2 7.5    -- shoulders into the drive block
+                , pt -3 5, pt -3 -5
+                ]
 
-        wingL =
-            String.join " " [ pt -2.5 0, pt -8 4, pt -7 5, pt -2.5 4 ]
+        -- raised bridge superstructure near the bow
+        bridge =
+            String.join " " [ pt -1.4 -6, pt 1.4 -6, pt 1.1 -2.5, pt -1.1 -2.5 ]
 
-        wingR =
-            String.join " " [ pt 2.5 0, pt 8 4, pt 7 5, pt 2.5 4 ]
+        -- broad aft drive block
+        drive =
+            String.join " " [ pt -2.6 5.2, pt 2.6 5.2, pt 2.6 7.8, pt -2.6 7.8 ]
 
         stroke =
             case prio of
@@ -794,28 +821,29 @@ shipMarker sx sy heading prio =
                 ++ " " ++ String.fromFloat sx
                 ++ " " ++ String.fromFloat sy ++ ")"
 
-        poly pts fill =
-            Svg.polygon [ SA.points pts, SA.fill fill, SA.stroke "#0b1b26", SA.strokeWidth "0.5", SA.strokeLinejoin "round" ] []
+        poly pts fill sw =
+            Svg.polygon [ SA.points pts, SA.fill fill, SA.stroke "#0b1b26", SA.strokeWidth sw, SA.strokeLinejoin "round" ] []
+
+        engineGlow ex =
+            Svg.circle
+                [ SA.cx (String.fromFloat (sx + ex)), SA.cy (String.fromFloat (sy + 8.2)), SA.r "1.3"
+                , SA.fill (if prio == Critical then "#ff7043" else "#4dd0e1")
+                ]
+                [ smilPulse "opacity" "0.4;1;0.4" "0.7s" ]
     in
     Svg.g [ SA.transform rot ]
-        [ poly wingL "#37474F"
-        , poly wingR "#37474F"
-        , Svg.polygon
+        [ Svg.polygon
             [ SA.points hull
             , SA.fill   (priorityColor prio)
             , SA.stroke stroke
-            , SA.strokeWidth (if prio == Critical then "1.4" else "0.8")
+            , SA.strokeWidth (if prio == Critical then "1.3" else "0.8")
             , SA.strokeLinejoin "round"
             ]
             []
-        , Svg.circle
-            [ SA.cx (String.fromFloat sx), SA.cy (String.fromFloat (sy - 2)), SA.r "1.5", SA.fill "#cfefff", SA.opacity "0.95" ]
-            []
-        , Svg.circle
-            [ SA.cx (String.fromFloat sx), SA.cy (String.fromFloat (sy + 6)), SA.r "1.8"
-            , SA.fill (if prio == Critical then "#ff5b3a" else "#56d2ff")
-            ]
-            [ smilPulse "opacity" "0.45;1;0.45" "0.7s" ]
+        , poly drive "#263238" "0.4"
+        , poly bridge "#90A4AE" "0.4"
+        , engineGlow -1.3
+        , engineGlow 1.3
         ]
 
 
