@@ -84,15 +84,27 @@ viewScene cam cfg state metrics jobPositions =
                 |> List.concatMap
                     (\job ->
                         let
-                            wx   = job.x / 48.0
-                            wz   = job.y / 48.0
+                            baseX = job.x / 48.0
+                            baseZ = job.y / 48.0
                             dotY = if job.inTransit then 1.2 else 0.6
-                            ( sx, sy )   = Camera.project cam { x = wx, y = dotY, z = wz }
-                            ( shx, shy ) = Camera.project cam { x = wx, y = 0.02, z = wz }
-                            -- Heading: project a look-ahead point (the current
-                            -- target) and take the screen-space bearing so the
-                            -- ship banks toward where it is actually flying.
-                            ( tsx, tsy ) = Camera.project cam { x = job.tx / 48.0, y = dotY, z = job.ty / 48.0 }
+
+                            -- If the ship has reached a dock, pull it up to the
+                            -- berth's approach port (−x face) and aim it into the
+                            -- dock; otherwise it flies toward its waypoint target.
+                            ( renderPos, target ) =
+                                case nearestDock cfg baseX baseZ of
+                                    Just c ->
+                                        ( { x = c.x - 0.55, z = c.z }, { x = c.x, z = c.z } )
+
+                                    Nothing ->
+                                        ( { x = baseX, z = baseZ }, { x = job.tx / 48.0, z = job.ty / 48.0 } )
+
+                            ( sx, sy )   = Camera.project cam { x = renderPos.x, y = dotY, z = renderPos.z }
+                            ( shx, shy ) = Camera.project cam { x = renderPos.x, y = 0.02, z = renderPos.z }
+                            -- Heading: project a look-ahead point and take the
+                            -- screen-space bearing so the ship banks toward where
+                            -- it is going (or noses into the berth when docked).
+                            ( tsx, tsy ) = Camera.project cam { x = target.x, y = dotY, z = target.z }
                             dsx = tsx - sx
                             dsy = tsy - sy
                             heading =
@@ -313,8 +325,96 @@ nodeToObjects theme spec metrics mState =
                 , d           = 0.2
                 }
             }
+
+        decor =
+            if theme == "expanse" then
+                expanseDecor spec pos h nodeW
+            else
+                []
     in
-    pad ++ [ node, utilBar ] ++ beacon
+    pad ++ [ node, utilBar ] ++ beacon ++ decor
+
+
+{-| Expanse "station dressing" — extra SceneObjects that make each node kind
+read as part of a space station rather than a plain box. All built from Box
+primitives so they depth-sort with the rest of the scene.
+
+  * Dock (worker): two docking-clamp arms on the −x approach face + a guidance
+    light the ship noses up to.
+  * Dispatcher (Traffic Control): an antenna mast topped by a cyan beacon.
+  * Source/Sink (Arrivals/Departure): a jump-gate arch (two pylons + top beam).
+-}
+expanseDecor : NodeSpec -> { x : Float, y : Float, z : Float } -> Float -> Float -> List (SceneObject msg)
+expanseDecor spec pos h nodeW =
+    let
+        post px py pz ph w colour =
+            { pos    = { x = px, y = py, z = pz }
+            , height = ph
+            , shape  = Box { topColour = colour, leftColour = colour, rightColour = colour, w = w, d = w }
+            }
+
+        hw = nodeW / 2.0
+    in
+    case spec.kind of
+        ScenarioConfig.WorkerSpec _ ->
+            let
+                clampColour = "#455A64"
+                armX = pos.x - hw - 0.04
+            in
+            [ post armX 0.0 (pos.z - hw + 0.12) (h * 0.85) 0.12 clampColour
+            , post armX 0.0 (pos.z + hw - 0.12) (h * 0.85) 0.12 clampColour
+            , { pos    = { x = pos.x - hw - 0.18, y = h * 0.45, z = pos.z }
+              , height = 0.1
+              , shape  = Box { topColour = "#26C6DA", leftColour = "#0097A7", rightColour = "#006064", w = 0.12, d = 0.12 }
+              }
+            ]
+
+        ScenarioConfig.DispatcherSpec _ ->
+            [ post pos.x h pos.z 0.55 0.08 "#90A4AE"
+            , { pos    = { x = pos.x, y = h + 0.55, z = pos.z }
+              , height = 0.14
+              , shape  = Box { topColour = "#4DD0E1", leftColour = "#26C6DA", rightColour = "#0097A7", w = 0.18, d = 0.18 }
+              }
+            ]
+
+        ScenarioConfig.SourceSpec _ ->
+            gateArch pos h hw "#00838F"
+
+        ScenarioConfig.SinkSpec ->
+            gateArch pos h hw "#6A1B9A"
+
+        ScenarioConfig.InterruptSpec ->
+            []
+
+
+{-| A jump-gate arch: two pylons flanking the node in z, joined by a top beam. -}
+gateArch : { x : Float, y : Float, z : Float } -> Float -> Float -> String -> List (SceneObject msg)
+gateArch pos h hw colour =
+    let
+        zoff = hw + 0.18
+        topY = h + 0.35
+        pylon pz =
+            { pos    = { x = pos.x, y = 0.0, z = pos.z + pz }
+            , height = topY
+            , shape  = Box { topColour = colour, leftColour = darkenHex colour, rightColour = darkenHex colour, w = 0.14, d = 0.14 }
+            }
+    in
+    [ pylon -zoff
+    , pylon zoff
+    , { pos    = { x = pos.x, y = topY, z = pos.z }
+      , height = 0.14
+      , shape  = Box { topColour = colour, leftColour = darkenHex colour, rightColour = darkenHex colour, w = 0.14, d = 2.0 * zoff + 0.14 }
+      }
+    ]
+
+
+{-| Crude fixed darkening for the small set of gate colours used above. -}
+darkenHex : String -> String
+darkenHex c =
+    case c of
+        "#00838F" -> "#004D40"
+        "#6A1B9A" -> "#2E0064"
+        _         -> "#222"
 
 
 {-| State-signalling beacon colour for a worker node. `Idle` (and non-worker
@@ -548,6 +648,34 @@ resolveEndpoint cfg ep =
             Nothing
 
 
+{-| The world-space centre of the dock (worker node) the given world point is
+sitting on, if any — used to pull a docked ship up to the berth port. -}
+nearestDock : ScenarioConfig -> Float -> Float -> Maybe { x : Float, z : Float }
+nearestDock cfg wx wz =
+    cfg.nodes
+        |> List.filterMap
+            (\n ->
+                case n.kind of
+                    ScenarioConfig.WorkerSpec _ ->
+                        let
+                            nx = n.x / 48.0
+                            nz = n.y / 48.0
+                            d2 = (wx - nx) * (wx - nx) + (wz - nz) * (wz - nz)
+                        in
+                        if d2 < 0.45 * 0.45 then
+                            Just ( d2, { x = nx, z = nz } )
+
+                        else
+                            Nothing
+
+                    _ ->
+                        Nothing
+            )
+        |> List.sortBy Tuple.first
+        |> List.head
+        |> Maybe.map Tuple.second
+
+
 arcMid : { x : Float, y : Float, z : Float } -> { x : Float, y : Float, z : Float } -> { x : Float, y : Float, z : Float }
 arcMid a b =
     { x = (a.x + b.x) / 2.0
@@ -645,10 +773,16 @@ shipMarker sx sy heading prio =
         pt dx dy =
             String.fromFloat (sx + dx) ++ "," ++ String.fromFloat (sy + dy)
 
-        -- Hull authored bow-up; rotated about (sx,sy) to face the heading.
+        -- All shapes authored bow-up (toward −y); the group is rotated about
+        -- (sx,sy) to face the travel heading.
         hull =
-            String.join " "
-                [ pt 0 -7, pt 4 -1, pt 3 5, pt -3 5, pt -4 -1 ]
+            String.join " " [ pt 0 -9, pt 3 -3, pt 2.5 6, pt -2.5 6, pt -3 -3 ]
+
+        wingL =
+            String.join " " [ pt -2.5 0, pt -8 4, pt -7 5, pt -2.5 4 ]
+
+        wingR =
+            String.join " " [ pt 2.5 0, pt 8 4, pt 7 5, pt 2.5 4 ]
 
         stroke =
             case prio of
@@ -659,9 +793,14 @@ shipMarker sx sy heading prio =
             "rotate(" ++ String.fromFloat heading
                 ++ " " ++ String.fromFloat sx
                 ++ " " ++ String.fromFloat sy ++ ")"
+
+        poly pts fill =
+            Svg.polygon [ SA.points pts, SA.fill fill, SA.stroke "#0b1b26", SA.strokeWidth "0.5", SA.strokeLinejoin "round" ] []
     in
     Svg.g [ SA.transform rot ]
-        [ Svg.polygon
+        [ poly wingL "#37474F"
+        , poly wingR "#37474F"
+        , Svg.polygon
             [ SA.points hull
             , SA.fill   (priorityColor prio)
             , SA.stroke stroke
@@ -670,13 +809,13 @@ shipMarker sx sy heading prio =
             ]
             []
         , Svg.circle
-            [ SA.cx (String.fromFloat sx)
-            , SA.cy (String.fromFloat (sy + 5.5))
-            , SA.r  "1.4"
-            , SA.fill (if prio == Critical then "#ff5b3a" else "#56d2ff")
-            , SA.opacity "0.9"
-            ]
+            [ SA.cx (String.fromFloat sx), SA.cy (String.fromFloat (sy - 2)), SA.r "1.5", SA.fill "#cfefff", SA.opacity "0.95" ]
             []
+        , Svg.circle
+            [ SA.cx (String.fromFloat sx), SA.cy (String.fromFloat (sy + 6)), SA.r "1.8"
+            , SA.fill (if prio == Critical then "#ff5b3a" else "#56d2ff")
+            ]
+            [ smilPulse "opacity" "0.45;1;0.45" "0.7s" ]
         ]
 
 
@@ -706,7 +845,7 @@ viewAlert active canvasW =
                 , SA.fill "#B71C1C"
                 , SA.opacity "0.88"
                 ]
-                []
+                [ smilPulse "opacity" "0.7;0.95;0.7" "1.2s" ]
             , Svg.text_
                 [ SA.x (String.fromFloat (canvasW / 2.0))
                 , SA.y "18"
@@ -719,6 +858,19 @@ viewAlert active canvasW =
                 ]
                 [ Svg.text "⚡ BOSMANG ALL-HANDS — WORKERS DOWN TOOLS ⚡" ]
             ]
+
+
+{-| A looping SMIL `<animate>` child — pulses an attribute through `values`
+without any per-frame work in Elm (the browser drives it). -}
+smilPulse : String -> String -> String -> Svg msg
+smilPulse attr values dur =
+    Svg.node "animate"
+        [ SA.attributeName attr
+        , SA.values values
+        , SA.dur dur
+        , SA.repeatCount "indefinite"
+        ]
+        []
 
 
 -- ── Starfield ─────────────────────────────────────────────────────────────────
