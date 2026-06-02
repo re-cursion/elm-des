@@ -1616,13 +1616,16 @@ Theming is purely cosmetic — the engine does not change.
       visible at a glance (a "3/6 full" buffer reads without the label) — informed by Simul8's
       queue-visualisation conventions (configurable item gap; gauge fill at a glance). Filled
       slots seat a bright cube on top of the socket.
-- [~] `expanse` isometric theme: **colour skin + starfield + ship job markers done** — theme-aware
-      node/queue/floor/socket colours in `IsoRenderer`, parallax starfield background, and job
-      markers drawn as small angular **ship-hull silhouettes** (`shipMarker`, asset-free vector
-      art; Critical warships get a brighter outline + engine glow) instead of plain dots. Still
-      pending: hex-panel floor tiles, 8-direction ship sprite sheet (32 frames), station background
-      image, worker billboards. (Web research: classic dimetric 2:1 / 26.565° vs our true-iso 30°
-      tilt; 8-direction sprite sheets are the standard for ships/vehicles.)
+- [~] `expanse` isometric theme: **colour skin + starfield + themed objects done.** Theme-aware
+      node/queue/floor/socket colours; parallax starfield; paneled deck tiles. Jobs render as proper
+      **ships** (`shipMarker`: hull + swept wings + cockpit + pulsing SMIL engine) that bank to their
+      travel heading and **pull up to a berth port** when docked (`nearestDock` offsets them to the
+      dock's −x approach face and noses them in). Nodes get **station dressing** (`expanseDecor`):
+      docks gain docking-clamp arms + a guidance light, Traffic Control a beacon antenna, and
+      Arrivals/Departure become jump-gate arches. The all-hands banner pulses (`smilPulse`). Still
+      pending (needs binary assets): raster hex-panel floor texture, 8-direction ship sprite sheet
+      (32 frames), station background image, worker billboards. (Web research: classic dimetric 2:1 /
+      26.565° vs our true-iso 30° tilt; 8-direction sprite sheets are the standard for ships.)
 - [x] Camera reset on double-click (`ResetCamera`); camera state lives in `Des.Scenario.Model`, never in `SimState`
 - [x] **State-reactive iso nodes**: `nodeToObjects` now takes the live `Maybe NodeState`. During a
       bosmang all-hands the node box renders dark/lifeless (`isPaused`), and every active node grows a
