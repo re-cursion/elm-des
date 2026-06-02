@@ -123,13 +123,17 @@ init cfg =
                 |> Result.withDefault
                     ( Topology.empty, SimState.init (Random.initialSeed cfg.meta.seed) )
     in
+    let
+        layout = buildLayout cfg
+        isExpanse = cfg.meta.theme == "expanse"
+    in
     ( { config      = cfg
-      , layout      = buildLayout cfg
+      , layout      = layout
       , topo        = topo
       , simState    = simState
-      , playback    = Stopped
-      , renderMode  = Flat2D
-      , camera      = isoCamera (buildLayout cfg)
+      , playback    = if isExpanse then Playing cfg.meta.speed else Stopped
+      , renderMode  = if isExpanse then Isometric else Flat2D
+      , camera      = isoCamera layout
       , drag        = Nothing
       , accumulator = 0
       , checkpoints = []
@@ -721,6 +725,7 @@ viewCanvas model =
                     [ IsoRenderer.viewStarfield cam isoW isoH
                     , IsoRenderer.viewScene cam model.config model.simState metrics jobPositions
                     , IsoRenderer.viewAlert (SimState.isInterruptActive model.simState) isoW
+                    , IsoRenderer.viewLegend isoH
                     ]
                 ]
 

@@ -2,6 +2,7 @@ module IsoRenderer exposing
     ( viewScene
     , viewStarfield
     , viewAlert
+    , viewLegend
     , JobIsoData
     , nodeToObjects
     , queueToObjects
@@ -886,6 +887,89 @@ viewAlert active canvasW =
                 ]
                 [ Svg.text "⚡ BOSMANG ALL-HANDS — WORKERS DOWN TOOLS ⚡" ]
             ]
+
+
+{-| Bottom-right HUD: ship priority key + dock status key. Screen-space, drawn
+last so it always sits above the scene. -}
+viewLegend : Float -> Svg msg
+viewLegend canvasH =
+    let
+        x0 = 10
+        y0 = canvasH - 118
+        bg =
+            Svg.rect
+                [ SA.x (String.fromFloat (x0 - 6))
+                , SA.y (String.fromFloat (y0 - 6))
+                , SA.width  "148"
+                , SA.height "118"
+                , SA.rx "4"
+                , SA.fill "#060D16"
+                , SA.opacity "0.82"
+                ]
+                []
+
+        row dy colour label =
+            Svg.g []
+                [ Svg.circle
+                    [ SA.cx (String.fromFloat (x0 + 6))
+                    , SA.cy (String.fromFloat (y0 + dy + 4))
+                    , SA.r "5"
+                    , SA.fill colour
+                    ]
+                    []
+                , Svg.text_
+                    [ SA.x  (String.fromFloat (x0 + 16))
+                    , SA.y  (String.fromFloat (y0 + dy + 8))
+                    , SA.fill "#c8d6e0"
+                    , SA.fontSize "10"
+                    , SA.fontFamily "monospace"
+                    ]
+                    [ Svg.text label ]
+                ]
+
+        padSwatch dy colour label =
+            Svg.g []
+                [ Svg.rect
+                    [ SA.x  (String.fromFloat (x0 + 1))
+                    , SA.y  (String.fromFloat (y0 + dy))
+                    , SA.width "10", SA.height "10"
+                    , SA.rx "2"
+                    , SA.fill colour
+                    ]
+                    []
+                , Svg.text_
+                    [ SA.x  (String.fromFloat (x0 + 16))
+                    , SA.y  (String.fromFloat (y0 + dy + 8))
+                    , SA.fill "#c8d6e0"
+                    , SA.fontSize "10"
+                    , SA.fontFamily "monospace"
+                    ]
+                    [ Svg.text label ]
+                ]
+
+        hdr dy label =
+            Svg.text_
+                [ SA.x  (String.fromFloat x0)
+                , SA.y  (String.fromFloat (y0 + dy))
+                , SA.fill "#5d8aa0"
+                , SA.fontSize "9"
+                , SA.fontFamily "monospace"
+                , SA.fontWeight "bold"
+                , SA.letterSpacing "1"
+                ]
+                [ Svg.text label ]
+    in
+    Svg.g []
+        [ bg
+        , hdr  6  "SHIPS"
+        , row 14  "#d63031" "Critical — warship"
+        , row 28  "#fdcb6e" "High — medivac"
+        , row 42  "#74b9ff" "Normal — freighter"
+        , row 56  "#b2bec3" "Low — shuttle"
+        , hdr 74  "DOCK PAD"
+        , padSwatch 80 "#1B5E20" "Free"
+        , padSwatch 94 "#B26A00" "Occupied"
+        ]
 
 
 {-| A looping SMIL `<animate>` child — pulses an attribute through `values`

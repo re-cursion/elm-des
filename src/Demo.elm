@@ -44,9 +44,9 @@ loadScenario key =
 init : () -> ( Model, Cmd Msg )
 init _ =
     let
-        ( sm, sc ) = loadScenario "single-worker"
+        ( sm, sc ) = loadScenario "belter-shipyard"
     in
-    ( { scenario = sm, selected = "single-worker" }
+    ( { scenario = sm, selected = "belter-shipyard" }
     , Cmd.map ScenarioMsg sc
     )
 
@@ -72,11 +72,15 @@ view model =
     div [ style "padding" "1rem", style "font-family" "monospace" ]
         [ div [ style "margin-bottom" "0.75rem" ]
             [ h2 [ style "margin" "0 0 0.5rem" ] [ text model.scenario.config.meta.title ]
-            , select [ onInput SelectScenario, style "margin-right" "0.5rem" ]
-                [ option [ value "single-worker"   ] [ text "M/M/1 Single Worker" ]
+            , select
+                [ onInput SelectScenario
+                , style "margin-right" "0.5rem"
+                , Html.Attributes.value model.selected
+                ]
+                [ option [ value "belter-shipyard" ] [ text "Tycho Station — Ship Docking (expanse)" ]
+                , option [ value "single-worker"   ] [ text "M/M/1 Single Worker" ]
                 , option [ value "two-parallel"    ] [ text "M/M/2 Two Parallel" ]
                 , option [ value "three-pipeline"  ] [ text "Three-stage Pipeline" ]
-                , option [ value "belter-shipyard" ] [ text "Belter Shipyard (expanse)" ]
                 ]
             ]
         , Html.map ScenarioMsg (Scenario.view model.scenario)
